@@ -3,99 +3,92 @@
 # original script by David Miller with revision by Dan Katz
 
 
-#####
+#### set up work environment and load data #####################################
 library(tidyverse)
 library(data.table)
 library(ResourceSelection) # hoslem.test
-#library(rms) # lrm
 library(pROC)
+library(ciTools) #install.packages("ciTools")
 
-tree_vars <- fread('/Users/dlm356/Library/CloudStorage/Box-Box/Katz lab/NYC/tree_mortality_variables/all_variables.csv')
-socioeco_vars <- fread('/Users/dlm356/Library/CloudStorage/Box-Box/Katz lab/NYC/tree_mortality_variables/model_df_socioeco.csv')
-#all(tree_vars$tree_id == socioeco_vars$tree_id) # TRUE
-#all(tree_vars$tree_dbh == socioeco_vars$tree_dbh) # TRUE
-#all(tree_vars$status == socioeco_vars$status) # TRUE
-#all(tree_vars$canopy_change == socioeco_vars$canopy_change) # NA?
+tree_vars <- fread('C:/Users/dsk273/Box/Katz lab/NYC/tree_mortality_variables/all_variables.csv')
+socioeco_vars <- fread('C:/Users/dsk273/Box/Katz lab/NYC/tree_mortality_variables/model_df_socioeco.csv')
 
-cc <- cbind.data.frame(tree_vars$canopy_change, socioeco_vars$canopy_change)
-cc[,3] <- cc[,1] - cc[,2]
-table(cc[,3]) # all zero, not sure why it came out NA
 
-# merge
-socioeco_vars_select <- socioeco_vars %>% select(bg_area_sqft, medincomeE, estimate_c_perc_unoccupied, estimate_c_perc_non_white, estimate_c_perc_unemployed, estimate_c_perc_poverty,
+# merge tree and socioeconomic variables
+socioeco_vars_select <- socioeco_vars %>% select(tree_id, bg_area_sqft, medincomeE, estimate_c_perc_unoccupied, estimate_c_perc_non_white, estimate_c_perc_unemployed, estimate_c_perc_poverty,
                                                  RPL_THEME1, RPL_THEME2, RPL_THEME3, RPL_THEME4, RPL_THEMES)
-tree_vars_full <- bind_cols(tree_vars, socioeco_vars_select)
+tree_vars_full <- left_join(tree_vars, socioeco_vars_select)
 
-# this is the full file
+### create derived variables ###################################################
 
-# Convert LandUse from integer to character for unique labels
-appendCharLU <- function(lu){
-  if (is.na(lu)){
-    lu <- paste0("LU_", lu)
-  } else {
-    if(nchar(as.character(lu)) < 2){
-      lu <- paste0("0", lu)
+  # Convert LandUse from integer to character for unique labels
+  appendCharLU <- function(lu){
+    if (is.na(lu)){
+      lu <- paste0("LU_", lu)
+    } else {
+      if(nchar(as.character(lu)) < 2){
+        lu <- paste0("0", lu)
+      }
+      lu <- paste0("LU_", lu)
     }
-    lu <- paste0("LU_", lu)
+    return(lu)
   }
-  return(lu)
-}
+  
+  # filter canopy change and relabel as canopy_endstate, relevel to LandUse_char
+  tree_vars_full <- tree_vars_full %>% filter(canopy_change %in% c(1, 3)) %>%
+    mutate(canopy_endstate = (canopy_change - 3)*(-1/2),
+           LandUse_char = sapply(LandUse, appendCharLU))
+  tree_vars_full$LandUse_char <- relevel(as.factor(tree_vars_full$LandUse_char), "LU_01") # this is Mike's recommendation for base case, may need to collapse land use classes
+  
+  # Checking SVI variables
+  # need to include SVI variables in here, work with the first three
+  # RPL_THEME1: socioeconomic status
+  # RPL_THEME2: household characteristics
+  # RPL_THEME3: racial and ethnic minority status
+  # RPL_THEME4: housing type and transportation (don't include this one)
+  # RPL_THEMES: summary of all the above
+  
+  # sp <- "Quercus palustris" #"Acer platanoides"
+  # tree_vars_full %>% filter(species == sp) %>%
+  #   ggplot(aes(x = RPL_THEME1, y = RPL_THEMES)) +
+  #   #ggplot(aes(x = RPL_THEME2, y = RPL_THEME3)) +
+  #   geom_point() +
+  #   geom_smooth(method = "lm")
+  
+  # RPL_THEME1 is very correlated with RPL_THEMES
+  cor(tree_vars_full$RPL_THEME1, tree_vars_full$RPL_THEMES, use = "complete.obs") # R = 0.90
+  # others are not as correlated
+  cor(tree_vars_full$RPL_THEME2, tree_vars_full$RPL_THEMES, use = "complete.obs") # R = 0.64
+  cor(tree_vars_full$RPL_THEME3, tree_vars_full$RPL_THEMES, use = "complete.obs") # R = 0.66
+  cor(tree_vars_full$RPL_THEME4, tree_vars_full$RPL_THEMES, use = "complete.obs") # R = 0.64
+  # check relationship of 1, 2, and 3
+  cor(tree_vars_full$RPL_THEME1, tree_vars_full$RPL_THEME2, use = "complete.obs") # R = 0.49
+  cor(tree_vars_full$RPL_THEME1, tree_vars_full$RPL_THEME3, use = "complete.obs") # R = 0.63
+  cor(tree_vars_full$RPL_THEME2, tree_vars_full$RPL_THEME3, use = "complete.obs") # R = 0.37
+  # 1 and 3 are somewhat correlated and may need to remove race & ethnicity but that's tbd
+  
+  tree_vars_full_nona <- na.omit(tree_vars_full) # This is a *big* hit, from 684k to 496k. Will have to see if RPL_THEMEx is worth it for predictive power.
+  # One big thing to note is that SVI is not available for parks and certain public land uses, so will limit applicability in certain parts of the city
+  
+  # reasonable distance threshold for land use proximity? This is in survey foot (effectively feet)
+  quantile(tree_vars_full_nona$pluto_dist, seq(0, 1, 0.01))
+  # picking 20, this is approx 95% of the remaining trees. Will apply this in the mutate part
+  
+  # Collapsed land use
+  tree_vars_full_nona$LandUse_char_collapsed <- tree_vars_full_nona$LandUse_char %>% as.character()
+  x <- tree_vars_full_nona$LandUse_char_collapsed %>%
+    case_match( "LU_01" ~ "LowDensityResidential",
+                c("LU_02", "LU_03") ~ "HigherDensityResidential",
+                c("LU_04", "LU_05") ~ "CommercialMix",
+                c("LU_06", "LU_07", "LU_10") ~ "IndustryTransport",
+                "LU_08" ~ "PublicInst",
+                "LU_09" ~ "OpenOutdoorRec",
+                "LU_11" ~ "Vacant")
+  tree_vars_full_nona$LandUse_char_collapsed <- as.factor(x)
+  tree_vars_full_nona$LandUse_char_collapsed <- relevel(as.factor(tree_vars_full_nona$LandUse_char_collapsed), "LowDensityResidential") # this is Mike's recommendation for base case, may need to collapse land use classes
 
-# filter canopy change and relabel as canopy_endstate, relevel to LandUse_char
-tree_vars_full <- tree_vars_full %>% filter(canopy_change %in% c(1, 3)) %>%
-  mutate(canopy_endstate = (canopy_change - 3)*(-1/2),
-         LandUse_char = sapply(LandUse, appendCharLU))
-tree_vars_full$LandUse_char <- relevel(as.factor(tree_vars_full$LandUse_char), "LU_01") # this is Mike's recommendation for base case, may need to collapse land use classes
 
-#
-
-# Checking SVI variables
-# need to include SVI variables in here, work with the first three
-# RPL_THEME1: socioeconomic status
-# RPL_THEME2: household characteristics
-# RPL_THEME3: racial and ethnic minority status
-# RPL_THEME4: housing type and transportation (don't include this one)
-# RPL_THEMES: summary of all the above
-
-sp <- "Quercus palustris" #"Acer platanoides"
-tree_vars_full %>% filter(species == sp) %>%
-  ggplot(aes(x = RPL_THEME1, y = RPL_THEMES)) +
-  #ggplot(aes(x = RPL_THEME2, y = RPL_THEME3)) +
-  geom_point() +
-  geom_smooth(method = "lm")
-
-# RPL_THEME1 is very correlated with RPL_THEMES
-cor(tree_vars_full$RPL_THEME1, tree_vars_full$RPL_THEMES, use = "complete.obs") # R = 0.90
-# others are not as correlated
-cor(tree_vars_full$RPL_THEME2, tree_vars_full$RPL_THEMES, use = "complete.obs") # R = 0.64
-cor(tree_vars_full$RPL_THEME3, tree_vars_full$RPL_THEMES, use = "complete.obs") # R = 0.66
-cor(tree_vars_full$RPL_THEME4, tree_vars_full$RPL_THEMES, use = "complete.obs") # R = 0.64
-# check relationship of 1, 2, and 3
-cor(tree_vars_full$RPL_THEME1, tree_vars_full$RPL_THEME2, use = "complete.obs") # R = 0.49
-cor(tree_vars_full$RPL_THEME1, tree_vars_full$RPL_THEME3, use = "complete.obs") # R = 0.63
-cor(tree_vars_full$RPL_THEME2, tree_vars_full$RPL_THEME3, use = "complete.obs") # R = 0.37
-# 1 and 3 are somewhat correlated and may need to remove race & ethnicity but that's tbd
-
-tree_vars_full_nona <- na.omit(tree_vars_full) # This is a *big* hit, from 684k to 496k. Will have to see if RPL_THEMEx is worth it for predictive power.
-# One big thing to note is that SVI is not available for parks and certain public land uses, so will limit applicability in certain parts of the city
-
-# reasonable distance threshold for land use proximity? This is in survey foot (effectively feet)
-quantile(tree_vars_full_nona$pluto_dist, seq(0, 1, 0.01))
-# picking 20, this is approx 95% of the remaining trees. Will apply this in the mutate part
-
-# Collapsed land use
-tree_vars_full_nona$LandUse_char_collapsed <- tree_vars_full_nona$LandUse_char %>% as.character()
-x <- tree_vars_full_nona$LandUse_char_collapsed %>%
-  case_match( "LU_01" ~ "LowDensityResidential",
-              c("LU_02", "LU_03") ~ "HigherDensityResidential",
-              c("LU_04", "LU_05") ~ "CommercialMix",
-              c("LU_06", "LU_07", "LU_10") ~ "IndustryTransport",
-              "LU_08" ~ "PublicInst",
-              "LU_09" ~ "OpenOutdoorRec",
-              "LU_11" ~ "Vacant")
-tree_vars_full_nona$LandUse_char_collapsed <- as.factor(x)
-tree_vars_full_nona$LandUse_char_collapsed <- relevel(as.factor(tree_vars_full_nona$LandUse_char_collapsed), "LowDensityResidential") # this is Mike's recommendation for base case, may need to collapse land use classes
-
+### create dataframe for analysis ##############################################
 # Format input df as needed
 tree_vars_full_nona_format <- tree_vars_full_nona %>%
   filter(pluto_dist < 20, tree_dbh >= 3) %>% # tree distance and minimum tree size of 3 inches, Bigelow
@@ -105,8 +98,9 @@ tree_vars_full_nona_format <- tree_vars_full_nona %>%
          is_B_cons_bool = as.logical(is_B_cons),
          is_S_cons_bool = as.logical(is_S_cons),
          is_DM_bool = as.logical(is_DM)) %>%
-  select(genus, species, 
-         canopy_endstate, # dependent variable - does this need to be factor??
+  select(tree_id, geom, 
+         genus, species, 
+         canopy_endstate, # dependent variable 
          tree_dbh, steward_level, # tree diameter at breast height, number of signs of stewardship
          BldgClass_fac, BldgClass_Group_fac, LandUse_char, LandUse_char_collapsed, # building type (detailed), building type (high level), land use
          in_sandy_zone_bool, # sandy inundation zone
@@ -116,8 +110,12 @@ tree_vars_full_nona_format <- tree_vars_full_nona %>%
          TC_10_2017, GS_10_2017, SO_10_2017, WA_10_2017, BD_10_2017, RD_10_2017, OI_10_2017, RR_10_2017, # land cover 2017, doing 10 m
          TC_10_2021, GS_10_2021, SO_10_2021, WA_10_2021, BD_10_2021, RD_10_2021, OI_10_2021, RR_10_2021, # land cover 2021, doing 10 m
          RPL_THEME1, RPL_THEME2, RPL_THEME3, RPL_THEME3, RPL_THEME4, RPL_THEMES) %>%
-  mutate(imp_10_2021 = BD_10_2017 + RD_10_2017 + OI_10_2017 + RR_10_2017)
-
+  mutate(imp_10_2021 = BD_10_2017 + RD_10_2017 + OI_10_2017 + RR_10_2017) %>% 
+    separate_wider_delim(., cols = geom, delim = ",", names = c( "lon", "lat")) %>%  #extract coordinates from text string "geom"
+    mutate(lat = readr::parse_number(lat),
+           lon = readr::parse_number(lon))
+  
+  
 # do bins of tree dbh
 #quantile(tree_vars_full_nona_format$tree_dbh, seq(0,1,0.1))
 # Remove small trees
@@ -132,14 +130,101 @@ tree_vars_full_nona_format$RPL_THEME3_bin <- cut(tree_vars_full_nona_format$RPL_
 tree_vars_full_nona_format$RPL_THEME4_bin <- cut(tree_vars_full_nona_format$RPL_THEME4, c(0, 0.25, 0.5, 0.75, 1), include.lowest = TRUE) # *won't use this but for completeness
 tree_vars_full_nona_format$RPL_THEMES_bin <- cut(tree_vars_full_nona_format$RPL_THEMES, c(0, 0.25, 0.5, 0.75, 1), include.lowest = TRUE) # just doing these bins for now
 
-#####
-# Now:
-# tree_vars_full_nona_format is the formatted data
+### including the list of species with enough individuals to analyze ##################
+cut_off_n <- 5000 #cut off number of individuals
 
-tree_vars_full_nona_format$species %>% table() %>% sort()
-sp_counts <- table(tree_vars_full_nona_format$species)
-sp_list <- names(sp_counts[which(sp_counts > 5000)]) # list of species with number of samples available
+#species with a n above that number
+species_n <- 
+  tree_vars_full_nona_format %>% 
+  group_by(species) %>% 
+  summarize(n = n()) %>% 
+  filter(n > cut_off_n) %>% 
+  filter(species != "Acer") #remove the unidentified Acer
 
+#label non-focal species as "other"
+tree_vars_full_nona_format <- tree_vars_full_nona_format %>% 
+  mutate(sp_a = case_when(species %in% species_n$species ~ species,
+                          TRUE ~ "other"))
+
+
+### analyzing per species mortality with a glm #####################################
+sp_list <- unique(tree_vars_full_nona_format$sp_a) %>% sort()
+
+#where to save output
+mort_model_list <- vector("list", length(sp_list))
+fitted_preds_list <- vector("list", length(sp_list))
+future_preds_list <- vector("list", length(sp_list))
+
+for (i in 1:length(sp_list)){
+ # for (i in 12:12){
+  print(i)
+  sp <- sp_list[i] #sp <- sp_list[12]
+  sp_sub_format <- tree_vars_full_nona_format %>% filter(species == sp_a)
+  mort_model <- glm( canopy_endstate ~ imp_10_2021 + tree_dbh_bin + is_DM_bool + steward_level + in_sandy_zone_bool + LandUse_char_collapsed + 
+                       RPL_THEME1_bin + RPL_THEME2_bin + RPL_THEME3_bin +
+                       imp_10_2021 + steward_level + is_DM_bool, #tree_dbh_bin:is_DM_bool,
+                     family = binomial(link = "cloglog"),
+                     na.action = na.exclude,
+                     data = sp_sub_format)
+  mort_model$species <- sp
+  
+  # not every tree gets modeled, may be an issue with the input predictor variables? Using default g value of 10
+  # p.value, want it to be > 0.05 (NOT significant), example: mort_model_list[[2]]$hoslem$p.value
+    mort_model$hoslem <- hoslem.test(mort_model$model$canopy_endstate, mort_model$fitted.values)
+
+  # area under the curve, example: mort_model_list[[2]]$roc_curve$auc
+    mort_model$roc_curve <- roc(mort_model$model$canopy_endstate, mort_model$fitted.values)
+
+  #save mortality model
+  mort_model_list[[i]] <- mort_model
+  
+  # can save this as an RDS file (if needed, this runs quickly)
+  # saveRDS()
+  
+  ## extract fitted values from model -------------------------------
+  summary(mort_model)
+  mort_model$fitted.values
+  
+  tree_vars_fitted_focal <- 
+  tree_vars_full_nona_format %>% 
+    filter( sp_a == sp) %>% 
+    select(-canopy_endstate) %>% 
+    mutate(pred_fit = predict.glm(object = mort_model, newdata = ., type = "response")) %>% 
+    select(tree_id, lat, lon, species, sp_a, tree_dbh, pred_fit)
+  
+      #save predictions for the focal species
+      fitted_preds_list[[i]] <- tree_vars_fitted_focal
+  
+  
+  ## extract predictions of future survival from model -------------
+  tree_vars_predict_focal <- tree_vars_full_nona_format %>% 
+    filter(canopy_endstate == 1) %>% 
+    filter( sp_a == sp) %>% 
+    select(-canopy_endstate) %>% 
+    mutate(pred_surv = predict.glm(object = mort_model, newdata = ., type = "response")) %>% 
+    select(tree_id, lat, lon, species, sp_a, tree_dbh, pred_surv)
+    #pred_surv = add_ci(data = ., model =  mort_model, type = "response", alpha = 0.05)
+  
+    #save predictions for the focal species
+    future_preds_list[[i]] <- tree_vars_predict_focal
+  
+  # ## extract residuals from model
+  #   tree_vars_resid_focal <-
+  #     tree_vars_full_nona_format %>% 
+  #     mutate(resid_response = residuals(mort_model, type = "response"))
+  #   
+  #   #save predictions for the focal species
+  #   resids_preds_list[[i]] <- tree_vars_resid_focal
+    
+}
+
+#save survival predictions
+fitted_preds <- bind_rows(fitted_preds_list)
+future_preds <- bind_rows(future_preds_list) 
+
+
+
+### table 1: summary of survival by species ####################################
 tree_vars_full_nona_format$species[which(tree_vars_full_nona_format$species %in% sp_list)] %>% table()
 
 endstate0 <- tree_vars_full_nona_format$species[which(tree_vars_full_nona_format$species %in% sp_list & tree_vars_full_nona_format$canopy_endstate == 0)] %>% table()
@@ -147,36 +232,66 @@ endstate1 <- tree_vars_full_nona_format$species[which(tree_vars_full_nona_format
 endstate1/(endstate0+endstate1)*100 # % survival, 4 years
 (endstate1/(endstate0+endstate1))^(1/4)*100 # % survival, annual
 
-mort_model_list <- vector("list", length(sp_list))
 
-for (i in 1:length(sp_list)){
-  #for (i in 1:10){
-  print(i)
-  sp <- sp_list[i]
-  sp_sub_format <- tree_vars_full_nona_format %>% filter(species == sp)
-  mort_model <- glm( canopy_endstate ~ imp_10_2021 + tree_dbh_bin + is_DM_bool + steward_level + in_sandy_zone_bool + LandUse_char_collapsed + 
-                       RPL_THEME1_bin + RPL_THEME2_bin + RPL_THEME3_bin +
-                       tree_dbh_bin:imp_10_2021 + tree_dbh_bin:steward_level + tree_dbh_bin:is_DM_bool,
-                     family = binomial(link = "cloglog"),
-                     data = sp_sub_format)
-  mort_model$species <- sp
-  
-  # not every tree gets modeled, may be an issue with the input predictor variables? Using default g value of 10
-  mort_model$hoslem <- hoslem.test(mort_model$model$canopy_endstate, mort_model$fitted.values)
-  # p.value, want it to be > 0.05 (NOT significant), example: mort_model_list[[2]]$hoslem$p.value
-  
-  mort_model$roc_curve <- roc(mort_model$model$canopy_endstate, mort_model$fitted.values)
-  # area under the curve, example: mort_model_list[[2]]$roc_curve$auc
-  
-  mort_model_list[[i]] <- mort_model
-}
 
-# can save this as an RDS file (if needed, this runs quickly)
-# saveRDS()
+### Fig X: #######################################################
+future_preds %>% 
+  group_by(sp_a) %>% 
+  summarize(pred_surv_mean = mean(pred_surv, na.rm = TRUE),
+            pred_surv_median = median(pred_surv, na.rm = TRUE))
+  
+  
+ggplot(future_preds, aes(x = tree_dbh, y = pred_surv)) + geom_hex() + facet_wrap(~sp_a) + theme_bw()
+
+
+ggplot(future_preds, aes(x = lon, y = lat)) + geom_hex() + facet_wrap(~sp_a) + theme_bw() + scale_fill_viridis_c()
+
+ggplot(future_preds, aes(x = lon, y = lat, z = pred_surv)) + stat_summary_hex(fun = median, bins = 30) + facet_wrap(~sp_a) + theme_bw() + scale_fill_viridis_c()
+
+#modeled mortality risk for trees
+ggplot(fitted_preds, aes(x = lon, y = lat, z = pred_fit)) + 
+  stat_summary_hex(fun = median, bins = 40) + facet_wrap(~sp_a) + theme_bw() + 
+  scale_fill_viridis_c(option = "turbo", direction = -1, name = "median survival (%)") + xlab("longitude") + ylab("latitude") + 
+  theme(strip.text = element_text(face = "italic"),
+    legend.position = c(0.8, 0.1),
+    legend.background = element_rect(fill = "white", color = "grey80"),
+    panel.grid.major = element_blank(),  
+    panel.grid.minor = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank())
+
+
+#predicted future mortality risk - should be pretty similar to previous figure
+ggplot(future_preds, aes(x = lon, y = lat, z = pred_surv)) + 
+  stat_summary_hex(fun = median, bins = 150) + #facet_wrap(~sp_a) + 
+  scale_fill_viridis_c(option = "turbo", direction = -1, name = "median survival (%)") + xlab("longitude") + ylab("latitude") + 
+  theme_bw() + 
+  theme(strip.text = element_text(face = "italic"),
+        legend.position = c(0.8, 0.1),
+        legend.background = element_rect(fill = "white", color = "grey80"),
+        panel.grid.major = element_blank(),  
+        panel.grid.minor = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())
+
+#SI X: map of tree sample size by species
+ggplot(future_preds, aes(x = lon, y = lat, z = pred_surv)) + 
+  geom_hex() + facet_wrap(~sp_a) + theme_bw() + 
+  scale_fill_viridis_c(option = "turbo", name = "n") + xlab("longitude") + ylab("latitude") + 
+  theme(strip.text = element_text(face = "italic"),
+        legend.position = c(0.8, 0.1),
+        legend.background = element_rect(fill = "white", color = "grey80"),
+        panel.grid.major = element_blank(),  
+        panel.grid.minor = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())
+
+
+
 
 # Setup plot with facets by variable, with species down the y-axis
 
-for (i in 1:length(sp_list)){
+for (i in 1:length(sp_list)){  #for (i in 12:12){
   print(i)
   coeff_names <- names(mort_model_list[[i]]$coefficients)
   beta <- mort_model_list[[i]]$coefficients
@@ -369,10 +484,10 @@ df_mort_models %>%
 #   theme_bw() +
 #   theme(strip.text = element_text(face = "italic"))
 # 
-# ggsave("/Users/dlm356/dlm356_files/nyc_tree_mortality/figures/logistic_regression_odds_ratio_by_species_example_logit.jpg",
+# ggsave("/Users/dsk273/dsk273_files/nyc_tree_mortality/figures/logistic_regression_odds_ratio_by_species_example_logit.jpg",
 #       width = 12, height = 7, units = "in")
 # 
-# # ggsave("/Users/dlm356/dlm356_files/nyc_tree_mortality/figures/logistic_regression_odds_ratio_by_species_example_cloglog.jpg",
+# # ggsave("/Users/dsk273/dsk273_files/nyc_tree_mortality/figures/logistic_regression_odds_ratio_by_species_example_cloglog.jpg",
 # #        width = 12, height = 7, units = "in")
 # 
 # # Need to get model fit parameters for these as well
@@ -399,5 +514,5 @@ df_mort_models %>%
 #   labs(x = "Total Alive + Dead", y = "Survival %") +
 #   theme_bw() +
 #   theme(legend.position = "none")
-# ggsave("/Users/dlm356/dlm356_files/nyc_tree_mortality/figures/top_species_survival_counts.jpg",
+# ggsave("/Users/dsk273/dsk273_files/nyc_tree_mortality/figures/top_species_survival_counts.jpg",
 #        width = 6, height = 5, units = "in")
