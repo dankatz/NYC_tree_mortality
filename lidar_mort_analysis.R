@@ -8,16 +8,24 @@ library(tidyverse)
 library(data.table)
 library(ResourceSelection) # hoslem.test
 library(pROC)
-library(ciTools) #install.packages("ciTools")
+library(ciTools) #install.packages("here")
+library(sf)
+library(basemaps)
+library(terra)
+library(here)
+library(gt)
 
-tree_vars <- fread('C:/Users/dsk273/Box/Katz lab/NYC/tree_mortality_variables/all_variables.csv')
-socioeco_vars <- fread('C:/Users/dsk273/Box/Katz lab/NYC/tree_mortality_variables/model_df_socioeco.csv')
+your_path_for_box <- "C:/Users/dsk273/Box/Katz lab/NYC/"
+tree_vars <- fread(paste0(your_path_for_box, '/tree_mortality_variables/all_variables.csv'))
+socioeco_vars <- fread(paste0(your_path_for_box,'/tree_mortality_variables/model_df_socioeco.csv'))
 
 
 # merge tree and socioeconomic variables
 socioeco_vars_select <- socioeco_vars %>% select(tree_id, bg_area_sqft, medincomeE, estimate_c_perc_unoccupied, estimate_c_perc_non_white, estimate_c_perc_unemployed, estimate_c_perc_poverty,
                                                  RPL_THEME1, RPL_THEME2, RPL_THEME3, RPL_THEME4, RPL_THEMES)
 tree_vars_full <- left_join(tree_vars, socioeco_vars_select)
+
+
 
 ### create derived variables ###################################################
 
@@ -91,7 +99,10 @@ tree_vars_full <- left_join(tree_vars, socioeco_vars_select)
 ### create dataframe for analysis ##############################################
 # Format input df as needed
 tree_vars_full_nona_format <- tree_vars_full_nona %>%
-  filter(pluto_dist < 20, tree_dbh >= 3) %>% # tree distance and minimum tree size of 3 inches, Bigelow
+  mutate(dbh_cm = tree_dbh * 2.54) %>%  #convert dbh from inches to cm
+  filter(dbh_cm > 7.62) %>%  # remove small trees; 7.6 cm is 3 inches listed in Bigelow
+  filter(tree_dbh < 118) %>%  #removing trees with a DBH greater than the maximum ever recorded in NYC 
+  filter(pluto_dist < 20) %>% # tree distance 
   mutate(BldgClass_fac = factor(BldgClass), 
          BldgClass_Group_fac = factor(BldgClass_Group),
          in_sandy_zone_bool = as.logical(in_sandy_zone),
@@ -101,7 +112,7 @@ tree_vars_full_nona_format <- tree_vars_full_nona %>%
   select(tree_id, geom, 
          genus, species, 
          canopy_endstate, # dependent variable 
-         tree_dbh, steward_level, # tree diameter at breast height, number of signs of stewardship
+         tree_dbh, dbh_cm, steward_level, # tree diameter at breast height, number of signs of stewardship
          BldgClass_fac, BldgClass_Group_fac, LandUse_char, LandUse_char_collapsed, # building type (detailed), building type (high level), land use
          in_sandy_zone_bool, # sandy inundation zone
          is_B_cons_bool, is_S_cons_bool, is_DM_bool, # building construction, street construction, building demolition
@@ -111,11 +122,11 @@ tree_vars_full_nona_format <- tree_vars_full_nona %>%
          TC_10_2021, GS_10_2021, SO_10_2021, WA_10_2021, BD_10_2021, RD_10_2021, OI_10_2021, RR_10_2021, # land cover 2021, doing 10 m
          RPL_THEME1, RPL_THEME2, RPL_THEME3, RPL_THEME3, RPL_THEME4, RPL_THEMES) %>%
   mutate(imp_10_2021 = BD_10_2017 + RD_10_2017 + OI_10_2017 + RR_10_2017) %>% 
-    separate_wider_delim(., cols = geom, delim = ",", names = c( "lon", "lat")) %>%  #extract coordinates from text string "geom"
+    separate_wider_delim(., cols = geom, delim = ",", names = c( "lon", "lat")) %>%  #extract coordinates from geom text string 
     mutate(lat = readr::parse_number(lat),
            lon = readr::parse_number(lon))
-  
-  
+   
+    
 # do bins of tree dbh
 #quantile(tree_vars_full_nona_format$tree_dbh, seq(0,1,0.1))
 # Remove small trees
@@ -139,12 +150,13 @@ species_n <-
   group_by(species) %>% 
   summarize(n = n()) %>% 
   filter(n > cut_off_n) %>% 
-  filter(species != "Acer") #remove the unidentified Acer
+  filter(species != "Acer") #remove the unidentified Acer individuals
 
 #label non-focal species as "other"
 tree_vars_full_nona_format <- tree_vars_full_nona_format %>% 
   mutate(sp_a = case_when(species %in% species_n$species ~ species,
                           TRUE ~ "other"))
+
 
 
 ### analyzing per species mortality with a glm #####################################
@@ -224,17 +236,107 @@ future_preds <- bind_rows(future_preds_list)
 
 
 
-### table 1: summary of survival by species ####################################
-tree_vars_full_nona_format$species[which(tree_vars_full_nona_format$species %in% sp_list)] %>% table()
+### table 1: summary of survival by focal species  ####################################
 
-endstate0 <- tree_vars_full_nona_format$species[which(tree_vars_full_nona_format$species %in% sp_list & tree_vars_full_nona_format$canopy_endstate == 0)] %>% table()
-endstate1 <- tree_vars_full_nona_format$species[which(tree_vars_full_nona_format$species %in% sp_list & tree_vars_full_nona_format$canopy_endstate == 1)] %>% table()
-endstate1/(endstate0+endstate1)*100 # % survival, 4 years
-(endstate1/(endstate0+endstate1))^(1/4)*100 # % survival, annual
+table_1 <- tree_vars_full_nona_format %>% 
+  group_by(sp_a) %>% 
+  summarize(n = n(),
+            median_dbh = median(dbh_cm),
+            sum_alive = sum(canopy_endstate),
+            mean_alive = sum_alive/n,
+            annual_surv = mean_alive ^ (1/4))  #annual survival
+
+table_1_all_trees <- tree_vars_full_nona_format %>% 
+  summarize(sp_a = "all trees", 
+            n = n(),
+            median_dbh = median(dbh_cm),
+            sum_alive = sum(canopy_endstate),
+            mean_alive = sum_alive/n,
+            annual_surv = mean_alive ^ (1/4))
+
+table_1 <- rbind(table_1, table_1_all_trees) %>% 
+          select(-sum_alive, -mean_alive) %>% 
+          mutate(annual_surv = annual_surv * 100)
+
+#add common names
+  common_name_lookup <- read_csv(paste0(your_path_for_box,'/tree_mortality_variables/common_name_lookup.csv')) %>% 
+    rename(sp_a = species)
+  table_1 <- left_join(table_1, common_name_lookup) %>% 
+    select(sp_a, common_name, n, median_dbh, annual_surv)
+
+table_1  %>% ungroup() %>% 
+  gt() %>% 
+  fmt_number(columns  = c(median_dbh, annual_surv), decimals = 1) |>
+  fmt_integer(columns = n, sep_mark = ",") %>% 
+  cols_label(
+    sp_a = "species",
+    common_name = "common name",
+    n = "n",
+    median_dbh = "median DBH (cm)",
+    annual_surv = "annual survival (%)" ) |>
+  tab_style(style = cell_borders(
+      sides = "bottom",
+      color = "black",
+      weight = px(2),
+      style = "solid"),
+    locations = cells_column_labels()) %>% 
+  gtsave( paste0(your_path_for_box, "tree_mortality/NYC_st_tree_results/table1.docx"))  
 
 
 
-### Fig X: #######################################################
+
+### Fig 2: survival by species #######################################################
+fig2 <- tree_vars_full_nona_format %>% 
+  select(sp_a, canopy_endstate, dbh_cm) %>% 
+  group_by(sp_a) %>% 
+  mutate(quintile = ntile(dbh_cm, 4)) %>%  #calculate survival per quintile or quartile per species
+  ungroup() %>% 
+  group_by(sp_a, quintile) %>% 
+  summarize(median_dbh = median(dbh_cm),
+            mean_mort = mean(canopy_endstate),
+            mean_annual_mort = 100 * (mean_mort^(1/4)),
+            n = n()) %>% 
+  ggplot(aes(x = median_dbh, y = mean_annual_mort, color = sp_a)) + geom_point() + geom_line()+ theme_bw() + xlab("DBH (cm)") + ylab("annual mortality (%)") +
+  scale_color_viridis_d(option = "turbo", name = "species") +
+  theme(panel.grid.major = element_blank(),  
+      panel.grid.minor = element_blank(),
+      legend.text = element_text(face = "italic"))      
+
+ggsave(paste0(your_path_for_box, "tree_mortality/NYC_st_tree_results/fig_2.png"),
+       width = 7, height = 5, units = "in", dpi = 400)
+
+
+
+### Fig 4: #######################################################
+
+#load in nyc boundary polygon
+nyc_boundary <- st_read( "C:/Users/dsk273/Box/Katz lab/NYC/nyc_boundary_polygon/nybb.shp") %>% 
+  st_union() %>% #combine the different boroughs
+  st_transform(., crs = 2263)
+#nyc_boundary_box <- st_as_sf(st_as_sfc(st_bbox(nyc_boundary)), crs= 32618)
+# nyc_boundary_invert <- st_difference(nyc_boundary_box, nyc_boundary)
+
+nyc_topo_rast <- basemap_raster(nyc_boundary, map_service = "carto", map_type = "light_no_labels") #basemap_raster(nyc_boundary, map_service = "esri", map_type = "world_hillshade")
+nyc_topo_spatrast <- rast(nyc_topo_rast) #convert to spatrast for plotting 
+
+ggplot() + ggthemes::theme_few() +   
+  geom_spatraster_rgb(data = nyc_topo_spatrast) +
+  #geom_spatraster(data = prod_400m_focal_sum/1000, alpha = 0.6) +
+  scale_fill_viridis_c(na.value = "transparent", 
+                       #option = "magma",
+                       name = "pollen production \n(trillions of grains within 400 m)",
+                       labels = scales::label_comma()) +
+  annotation_scale(location = "br",  # "bl" for bottom-left, other options exist
+                   bar_cols = c("black", "white"), # Colors of the scale bar segments
+                   style = "ticks",
+                   text_cex = 0.8) +  # Text size for the scale bar label
+  annotation_north_arrow(location = "br", height = unit( 0.8, "cm"), style = north_arrow_minimal,
+                         pad_x = unit(1, "cm"), pad_y = unit(1, "cm")) +
+  theme(  legend.position = c(0.1, 0.9),  # Places the legend at the top-left corner
+          legend.justification = c(0.1, 0.9)) # Aligns the legend box to its top-left corner)+
+
+
+
 future_preds %>% 
   group_by(sp_a) %>% 
   summarize(pred_surv_mean = mean(pred_surv, na.rm = TRUE),
@@ -288,7 +390,7 @@ ggplot(future_preds, aes(x = lon, y = lat, z = pred_surv)) +
 
 
 
-
+### Fig 3: coefficients for select logistic regression variables ######################################
 # Setup plot with facets by variable, with species down the y-axis
 
 for (i in 1:length(sp_list)){  #for (i in 12:12){
