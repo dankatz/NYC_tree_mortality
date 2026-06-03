@@ -8,12 +8,15 @@ library(tidyverse)
 library(data.table)
 library(ResourceSelection) # hoslem.test
 library(pROC)
-library(ciTools) #install.packages("here")
+library(ciTools) #install.packages("DHARMa")
 library(sf)
 library(basemaps)
 library(terra)
+library(tidyterra)
+library(ggspatial)
 library(here)
 library(gt)
+library(DHARMa)
 
 your_path_for_box <- "C:/Users/dsk273/Box/Katz lab/NYC/"
 tree_vars <- fread(paste0(your_path_for_box, '/tree_mortality_variables/all_variables.csv'))
@@ -101,7 +104,7 @@ tree_vars_full <- left_join(tree_vars, socioeco_vars_select)
 tree_vars_full_nona_format <- tree_vars_full_nona %>%
   mutate(dbh_cm = tree_dbh * 2.54) %>%  #convert dbh from inches to cm
   filter(dbh_cm > 7.62) %>%  # remove small trees; 7.6 cm is 3 inches listed in Bigelow
-  filter(tree_dbh < 118) %>%  #removing trees with a DBH greater than the maximum ever recorded in NYC 
+  filter(dbh_cm < 300) %>%  #removing trees with a DBH greater than the maximum ever recorded in NYC 
   filter(pluto_dist < 20) %>% # tree distance 
   mutate(BldgClass_fac = factor(BldgClass), 
          BldgClass_Group_fac = factor(BldgClass_Group),
@@ -162,10 +165,10 @@ tree_vars_full_nona_format <- tree_vars_full_nona_format %>%
 ### analyzing per species mortality with a glm #####################################
 sp_list <- unique(tree_vars_full_nona_format$sp_a) %>% sort()
 
-#where to save output
+#create empty lists to save output
 mort_model_list <- vector("list", length(sp_list))
 fitted_preds_list <- vector("list", length(sp_list))
-future_preds_list <- vector("list", length(sp_list))
+
 
 for (i in 1:length(sp_list)){
  # for (i in 12:12){
@@ -180,18 +183,26 @@ for (i in 1:length(sp_list)){
                      data = sp_sub_format)
   mort_model$species <- sp
   
-  # not every tree gets modeled, may be an issue with the input predictor variables? Using default g value of 10
-  # p.value, want it to be > 0.05 (NOT significant), example: mort_model_list[[2]]$hoslem$p.value
-    mort_model$hoslem <- hoslem.test(mort_model$model$canopy_endstate, mort_model$fitted.values)
+    #area under the curve, example: mort_model_list[[2]]$roc_curve$auc
+      mort_model$roc_curve <- roc(mort_model$model$canopy_endstate, mort_model$fitted.values)
 
-  # area under the curve, example: mort_model_list[[2]]$roc_curve$auc
-    mort_model$roc_curve <- roc(mort_model$model$canopy_endstate, mort_model$fitted.values)
+    #model diagnostics
+      sim <- simulateResiduals(mort_model, n = 250)
+      sim_results <- plot(sim)       # QQ plot + residual vs fitted
+        
+      testDispersion(sim)            # overdispersion test
+      testZeroInflation(sim)
+      
+      mort_model
+      
+sim$scaledResiduals
+testSpatialAutocorrelation(simulationOutput = sim, x = ~sim$fittedModel$data$lon, y= ~ sim$fittedModel$data$lat)
 
+      sim$fittedModel$data$lat
   #save mortality model
   mort_model_list[[i]] <- mort_model
-  
-  # can save this as an RDS file (if needed, this runs quickly)
-  # saveRDS()
+
+
   
   ## extract fitted values from model -------------------------------
   summary(mort_model)
@@ -200,39 +211,26 @@ for (i in 1:length(sp_list)){
   tree_vars_fitted_focal <- 
   tree_vars_full_nona_format %>% 
     filter( sp_a == sp) %>% 
-    select(-canopy_endstate) %>% 
     mutate(pred_fit = predict.glm(object = mort_model, newdata = ., type = "response")) %>% 
-    select(tree_id, lat, lon, species, sp_a, tree_dbh, pred_fit)
+    select(tree_id, lat, lon, species, sp_a, tree_dbh, pred_fit, canopy_endstate)
   
       #save predictions for the focal species
       fitted_preds_list[[i]] <- tree_vars_fitted_focal
   
-  
-  ## extract predictions of future survival from model -------------
-  tree_vars_predict_focal <- tree_vars_full_nona_format %>% 
-    filter(canopy_endstate == 1) %>% 
-    filter( sp_a == sp) %>% 
-    select(-canopy_endstate) %>% 
-    mutate(pred_surv = predict.glm(object = mort_model, newdata = ., type = "response")) %>% 
-    select(tree_id, lat, lon, species, sp_a, tree_dbh, pred_surv)
-    #pred_surv = add_ci(data = ., model =  mort_model, type = "response", alpha = 0.05)
-  
-    #save predictions for the focal species
-    future_preds_list[[i]] <- tree_vars_predict_focal
-  
-  # ## extract residuals from model
-  #   tree_vars_resid_focal <-
-  #     tree_vars_full_nona_format %>% 
-  #     mutate(resid_response = residuals(mort_model, type = "response"))
-  #   
-  #   #save predictions for the focal species
-  #   resids_preds_list[[i]] <- tree_vars_resid_focal
     
 }
 
-#save survival predictions
+#save survival predictions 
 fitted_preds <- bind_rows(fitted_preds_list)
-future_preds <- bind_rows(future_preds_list) 
+
+
+
+mort_model_list[[1]]$species
+# can save this as an RDS file (if needed, this runs quickly)
+# saveRDS()
+
+purrr::map(mort_model_list, "roc_curve")
+
 
 
 
@@ -279,8 +277,9 @@ table_1  %>% ungroup() %>%
       color = "black",
       weight = px(2),
       style = "solid"),
-    locations = cells_column_labels()) %>% 
-  gtsave( paste0(your_path_for_box, "tree_mortality/NYC_st_tree_results/table1.docx"))  
+    locations = cells_column_labels()) 
+#%>%  gtsave( paste0(your_path_for_box, "tree_mortality/NYC_st_tree_results/table1.docx"))  
+
 
 
 
@@ -296,7 +295,7 @@ fig2 <- tree_vars_full_nona_format %>%
             mean_mort = mean(canopy_endstate),
             mean_annual_mort = 100 * (mean_mort^(1/4)),
             n = n()) %>% 
-  ggplot(aes(x = median_dbh, y = mean_annual_mort, color = sp_a)) + geom_point() + geom_line()+ theme_bw() + xlab("DBH (cm)") + ylab("annual mortality (%)") +
+  ggplot(aes(x = median_dbh, y = mean_annual_mort, color = sp_a)) + geom_point() + geom_line()+ theme_bw() + xlab("DBH (cm)") + ylab("annual survival (%)") +
   scale_color_viridis_d(option = "turbo", name = "species") +
   theme(panel.grid.major = element_blank(),  
       panel.grid.minor = element_blank(),
@@ -307,74 +306,125 @@ ggsave(paste0(your_path_for_box, "tree_mortality/NYC_st_tree_results/fig_2.png")
 
 
 
-### Fig 4: #######################################################
+### Fig 4: map of predicted survival by species #######################################################
 
-#load in nyc boundary polygon
-nyc_boundary <- st_read( "C:/Users/dsk273/Box/Katz lab/NYC/nyc_boundary_polygon/nybb.shp") %>% 
-  st_union() %>% #combine the different boroughs
-  st_transform(., crs = 2263)
-#nyc_boundary_box <- st_as_sf(st_as_sfc(st_bbox(nyc_boundary)), crs= 32618)
-# nyc_boundary_invert <- st_difference(nyc_boundary_box, nyc_boundary)
+#project the predictions to the crs of the basemap tile (3857)
+fitted_preds_sf <- st_as_sf(fitted_preds, crs = 2263, coords = c("lon", "lat")) %>% 
+            st_transform(., crs = 3857) %>% 
+            bind_cols(st_coordinates(.) %>% as.data.frame())
+  
+# #load in nyc boundary polygon
+# nyc_boundary <- st_read( "C:/Users/dsk273/Box/Katz lab/NYC/nyc_boundary_polygon/nybb.shp") %>% 
+#   st_union() %>% #combine the different boroughs
+#   st_transform(., crs = 3857)
 
+#load in basemap
 nyc_topo_rast <- basemap_raster(nyc_boundary, map_service = "carto", map_type = "light_no_labels") #basemap_raster(nyc_boundary, map_service = "esri", map_type = "world_hillshade")
 nyc_topo_spatrast <- rast(nyc_topo_rast) #convert to spatrast for plotting 
 
-ggplot() + ggthemes::theme_few() +   
+#create figure
+fig_pred_fit <- ggplot() + ggthemes::theme_few() +   
   geom_spatraster_rgb(data = nyc_topo_spatrast) +
-  #geom_spatraster(data = prod_400m_focal_sum/1000, alpha = 0.6) +
-  scale_fill_viridis_c(na.value = "transparent", 
-                       #option = "magma",
-                       name = "pollen production \n(trillions of grains within 400 m)",
-                       labels = scales::label_comma()) +
-  annotation_scale(location = "br",  # "bl" for bottom-left, other options exist
-                   bar_cols = c("black", "white"), # Colors of the scale bar segments
-                   style = "ticks",
-                   text_cex = 0.8) +  # Text size for the scale bar label
-  annotation_north_arrow(location = "br", height = unit( 0.8, "cm"), style = north_arrow_minimal,
-                         pad_x = unit(1, "cm"), pad_y = unit(1, "cm")) +
-  theme(  legend.position = c(0.1, 0.9),  # Places the legend at the top-left corner
-          legend.justification = c(0.1, 0.9)) # Aligns the legend box to its top-left corner)+
-
-
-
-future_preds %>% 
-  group_by(sp_a) %>% 
-  summarize(pred_surv_mean = mean(pred_surv, na.rm = TRUE),
-            pred_surv_median = median(pred_surv, na.rm = TRUE))
-  
-  
-ggplot(future_preds, aes(x = tree_dbh, y = pred_surv)) + geom_hex() + facet_wrap(~sp_a) + theme_bw()
-
-
-ggplot(future_preds, aes(x = lon, y = lat)) + geom_hex() + facet_wrap(~sp_a) + theme_bw() + scale_fill_viridis_c()
-
-ggplot(future_preds, aes(x = lon, y = lat, z = pred_surv)) + stat_summary_hex(fun = median, bins = 30) + facet_wrap(~sp_a) + theme_bw() + scale_fill_viridis_c()
-
-#modeled mortality risk for trees
-ggplot(fitted_preds, aes(x = lon, y = lat, z = pred_fit)) + 
-  stat_summary_hex(fun = median, bins = 40) + facet_wrap(~sp_a) + theme_bw() + 
-  scale_fill_viridis_c(option = "turbo", direction = -1, name = "median survival (%)") + xlab("longitude") + ylab("latitude") + 
+  stat_summary_hex(data = fitted_preds_sf, aes(x = X, y = Y, z = pred_fit), fun = median, bins = 40) +
+  facet_wrap(~sp_a, ncol = 6) +
+  scale_fill_viridis_c(option = "turbo", direction = -1, name = "predicted \nmedian \nsurvival (%)") + xlab("") + ylab("") + 
   theme(strip.text = element_text(face = "italic"),
-    legend.position = c(0.8, 0.1),
-    legend.background = element_rect(fill = "white", color = "grey80"),
-    panel.grid.major = element_blank(),  
-    panel.grid.minor = element_blank(),
-    axis.text = element_blank(),
-    axis.ticks = element_blank())
-
-
-#predicted future mortality risk - should be pretty similar to previous figure
-ggplot(future_preds, aes(x = lon, y = lat, z = pred_surv)) + 
-  stat_summary_hex(fun = median, bins = 150) + #facet_wrap(~sp_a) + 
-  scale_fill_viridis_c(option = "turbo", direction = -1, name = "median survival (%)") + xlab("longitude") + ylab("latitude") + 
-  theme_bw() + 
-  theme(strip.text = element_text(face = "italic"),
-        legend.position = c(0.8, 0.1),
+        legend.position = c(0.92, 0.14),
         legend.background = element_rect(fill = "white", color = "grey80"),
         panel.grid.major = element_blank(),  
         panel.grid.minor = element_blank(),
         axis.text = element_blank(),
         axis.ticks = element_blank())
+  # annotation_scale(location = "br",  # "bl" for bottom-left, other options exist
+  #                  bar_cols = c("black", "white"), # Colors of the scale bar segments
+  #                  style = "ticks",
+  #                  text_cex = 0.8) +  # Text size for the scale bar label
+  # annotation_north_arrow(location = "br", height = unit( 0.8, "cm"), style = north_arrow_minimal,
+  #                        pad_x = unit(1, "cm"), pad_y = unit(1, "cm")) +
+  # theme(  legend.position = c(0.1, 0.9),  # Places the legend at the top-left corner
+  #         legend.justification = c(0.1, 0.9)) # Aligns the legend box to its top-left corner)+
+
+ggsave(paste0(your_path_for_box, "tree_mortality/NYC_st_tree_results/fig_4.png"),
+       width = 10, height = 6.5, units = "in", dpi = 400)
+
+
+### map of model residuals #####################################################
+#project the predictions to the crs of the basemap tile (3857)
+fitted_preds_sf <- st_as_sf(fitted_preds, crs = 2263, coords = c("lon", "lat")) %>% 
+  st_transform(., crs = 3857) %>% 
+  bind_cols(st_coordinates(.) %>% as.data.frame())
+
+# #load in nyc boundary polygon
+# nyc_boundary <- st_read( "C:/Users/dsk273/Box/Katz lab/NYC/nyc_boundary_polygon/nybb.shp") %>% 
+#   st_union() %>% #combine the different boroughs
+#   st_transform(., crs = 3857)
+
+#load in basemap
+nyc_topo_rast <- basemap_raster(nyc_boundary, map_service = "carto", map_type = "light_no_labels") #basemap_raster(nyc_boundary, map_service = "esri", map_type = "world_hillshade")
+nyc_topo_spatrast <- rast(nyc_topo_rast) #convert to spatrast for plotting 
+
+#function to remove bins with lower than a certain n
+bin_removal <- function(x) {
+  if(length(x) < 10) return(NA) 
+  return(mean(x))
+}
+
+#create figure
+fig_map_resid <- 
+  ggplot() + ggthemes::theme_few() +   
+  geom_spatraster_rgb(data = nyc_topo_spatrast) +
+  stat_summary_hex(data = fitted_preds_sf, aes(x = X, y = Y, z =  canopy_endstate - pred_fit), fun = bin_removal, bins = 20) +
+  facet_wrap(~sp_a, ncol = 6) +
+  scale_fill_viridis_c(option = "turbo", direction = -1, name = "residuals (%)") + xlab("") + ylab("") + 
+  theme(strip.text = element_text(face = "italic"),
+        legend.position = c(0.92, 0.14),
+        legend.background = element_rect(fill = "white", color = "grey80"),
+        panel.grid.major = element_blank(),  
+        panel.grid.minor = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())
+# annotation_scale(location = "br",  # "bl" for bottom-left, other options exist
+#                  bar_cols = c("black", "white"), # Colors of the scale bar segments
+#                  style = "ticks",
+#                  text_cex = 0.8) +  # Text size for the scale bar label
+# annotation_north_arrow(location = "br", height = unit( 0.8, "cm"), style = north_arrow_minimal,
+#                        pad_x = unit(1, "cm"), pad_y = unit(1, "cm")) +
+# theme(  legend.position = c(0.1, 0.9),  # Places the legend at the top-left corner
+#         legend.justification = c(0.1, 0.9)) # Aligns the legend box to its top-left corner)+
+
+ggsave(fig_map_resid, filename = paste0(your_path_for_box, "tree_mortality/NYC_st_tree_results/SI_resid_mapb.png"),
+       width = 10, height = 6.5, units = "in", dpi = 400)
+
+
+fitted_preds_sf %>% 
+  mutate(resid = canopy_endstate - pred_fit) %>% 
+  group_by(sp_a) %>% summarize(mean_resid = mean(resid))
+  ggplot(aes(x= resid)) + geom_histogram() + facet_wrap(~sp_a)
+future_preds %>% 
+  group_by(sp_a) %>% 
+  summarize(pred_surv_mean = mean(pred_surv, na.rm = TRUE),
+            pred_surv_median = median(pred_surv, na.rm = TRUE))
+  
+
+ggplot(future_preds, aes(x = lon, y = lat)) + geom_hex() + facet_wrap(~sp_a) + theme_bw() + scale_fill_viridis_c()
+
+ggplot(future_preds, aes(x = lon, y = lat, z = pred_surv)) + stat_summary_hex(fun = median, bins = 30) + facet_wrap(~sp_a) + theme_bw() + scale_fill_viridis_c()
+
+# 
+# 
+# 
+# #predicted future mortality risk - should be pretty similar to previous figure
+# ggplot(future_preds, aes(x = lon, y = lat, z = pred_surv)) + 
+#   stat_summary_hex(fun = median, bins = 150) + #facet_wrap(~sp_a) + 
+#   scale_fill_viridis_c(option = "turbo", direction = -1, name = "median survival (%)") + xlab("longitude") + ylab("latitude") + 
+#   theme_bw() + 
+#   theme(strip.text = element_text(face = "italic"),
+#         legend.position = c(0.8, 0.1),
+#         legend.background = element_rect(fill = "white", color = "grey80"),
+#         panel.grid.major = element_blank(),  
+#         panel.grid.minor = element_blank(),
+#         axis.text = element_blank(),
+#         axis.ticks = element_blank())
 
 #SI X: map of tree sample size by species
 ggplot(future_preds, aes(x = lon, y = lat, z = pred_surv)) + 
@@ -442,6 +492,56 @@ df_mort_models %>%
   theme_bw() +
   theme(strip.text = element_text(face = "italic"))
 # note that genus-only labels here are those trees that did not have a species label, and are not inclusive of the species labels
+
+
+### SI X: mortality rates for each genus ##############################################################
+
+# table_1 <- tree_vars_full_nona_format %>% 
+#   group_by(sp_a) %>% 
+#   summarize(n = n(),
+#             median_dbh = median(dbh_cm),
+#             sum_alive = sum(canopy_endstate),
+#             mean_alive = sum_alive/n,
+#             annual_surv = mean_alive ^ (1/4))  #annual survival
+# 
+# table_1_all_trees <- tree_vars_full_nona_format %>% 
+#   summarize(sp_a = "all trees", 
+#             n = n(),
+#             median_dbh = median(dbh_cm),
+#             sum_alive = sum(canopy_endstate),
+#             mean_alive = sum_alive/n,
+#             annual_surv = mean_alive ^ (1/4))
+# 
+# table_1 <- rbind(table_1, table_1_all_trees) %>% 
+#   select(-sum_alive, -mean_alive) %>% 
+#   mutate(annual_surv = annual_surv * 100)
+# 
+# #add common names
+# common_name_lookup <- read_csv(paste0(your_path_for_box,'/tree_mortality_variables/common_name_lookup.csv')) %>% 
+#   rename(sp_a = species)
+# table_1 <- left_join(table_1, common_name_lookup) %>% 
+#   select(sp_a, common_name, n, median_dbh, annual_surv)
+# 
+# table_1  %>% ungroup() %>% 
+#   gt() %>% 
+#   fmt_number(columns  = c(median_dbh, annual_surv), decimals = 1) |>
+#   fmt_integer(columns = n, sep_mark = ",") %>% 
+#   cols_label(
+#     sp_a = "species",
+#     common_name = "common name",
+#     n = "n",
+#     median_dbh = "median DBH (cm)",
+#     annual_surv = "annual survival (%)" ) |>
+#   tab_style(style = cell_borders(
+#     sides = "bottom",
+#     color = "black",
+#     weight = px(2),
+#     style = "solid"),
+#     locations = cells_column_labels()) 
+# #%>%  gtsave( paste0(your_path_for_box, "tree_mortality/NYC_st_tree_results/table1.docx"))  
+
+
+
 
 
 #####
