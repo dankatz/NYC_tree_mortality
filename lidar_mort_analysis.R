@@ -17,6 +17,7 @@ library(ggspatial)
 library(here)
 library(gt)
 library(DHARMa)
+library(splines)
 
 your_path_for_box <- "C:/Users/dsk273/Box/Katz lab/NYC/"
 tree_vars <- fread(paste0(your_path_for_box, '/tree_mortality_variables/all_variables.csv'))
@@ -24,13 +25,14 @@ socioeco_vars <- fread(paste0(your_path_for_box,'/tree_mortality_variables/model
 
 
 # merge tree and socioeconomic variables
-socioeco_vars_select <- socioeco_vars %>% select(tree_id, bg_area_sqft, medincomeE, estimate_c_perc_unoccupied, estimate_c_perc_non_white, estimate_c_perc_unemployed, estimate_c_perc_poverty,
+socioeco_vars_select <- socioeco_vars %>% select(tree_id, #medincomeE has too many NAs to reasonably include
+                                                 estimate_c_perc_unoccupied, estimate_c_perc_non_white, estimate_c_perc_unemployed, estimate_c_perc_poverty,
                                                  RPL_THEME1, RPL_THEME2, RPL_THEME3, RPL_THEME4, RPL_THEMES)
-tree_vars_full <- left_join(tree_vars, socioeco_vars_select)
+tree_vars_full <- left_join(tree_vars, socioeco_vars_select) 
 
 
 
-### create derived variables ###################################################
+### parse landuse ###################################################
 
   # Convert LandUse from integer to character for unique labels
   appendCharLU <- function(lu){
@@ -46,48 +48,13 @@ tree_vars_full <- left_join(tree_vars, socioeco_vars_select)
   }
   
   # filter canopy change and relabel as canopy_endstate, relevel to LandUse_char
-  tree_vars_full <- tree_vars_full %>% filter(canopy_change %in% c(1, 3)) %>%
-    mutate(canopy_endstate = (canopy_change - 3)*(-1/2),
-           LandUse_char = sapply(LandUse, appendCharLU))
+  tree_vars_full <- tree_vars_full %>% 
+    mutate(LandUse_char = sapply(LandUse, appendCharLU))
   tree_vars_full$LandUse_char <- relevel(as.factor(tree_vars_full$LandUse_char), "LU_01") # this is Mike's recommendation for base case, may need to collapse land use classes
   
-  # Checking SVI variables
-  # need to include SVI variables in here, work with the first three
-  # RPL_THEME1: socioeconomic status
-  # RPL_THEME2: household characteristics
-  # RPL_THEME3: racial and ethnic minority status
-  # RPL_THEME4: housing type and transportation (don't include this one)
-  # RPL_THEMES: summary of all the above
-  
-  # sp <- "Quercus palustris" #"Acer platanoides"
-  # tree_vars_full %>% filter(species == sp) %>%
-  #   ggplot(aes(x = RPL_THEME1, y = RPL_THEMES)) +
-  #   #ggplot(aes(x = RPL_THEME2, y = RPL_THEME3)) +
-  #   geom_point() +
-  #   geom_smooth(method = "lm")
-  
-  # RPL_THEME1 is very correlated with RPL_THEMES
-  cor(tree_vars_full$RPL_THEME1, tree_vars_full$RPL_THEMES, use = "complete.obs") # R = 0.90
-  # others are not as correlated
-  cor(tree_vars_full$RPL_THEME2, tree_vars_full$RPL_THEMES, use = "complete.obs") # R = 0.64
-  cor(tree_vars_full$RPL_THEME3, tree_vars_full$RPL_THEMES, use = "complete.obs") # R = 0.66
-  cor(tree_vars_full$RPL_THEME4, tree_vars_full$RPL_THEMES, use = "complete.obs") # R = 0.64
-  # check relationship of 1, 2, and 3
-  cor(tree_vars_full$RPL_THEME1, tree_vars_full$RPL_THEME2, use = "complete.obs") # R = 0.49
-  cor(tree_vars_full$RPL_THEME1, tree_vars_full$RPL_THEME3, use = "complete.obs") # R = 0.63
-  cor(tree_vars_full$RPL_THEME2, tree_vars_full$RPL_THEME3, use = "complete.obs") # R = 0.37
-  # 1 and 3 are somewhat correlated and may need to remove race & ethnicity but that's tbd
-  
-  tree_vars_full_nona <- na.omit(tree_vars_full) # This is a *big* hit, from 684k to 496k. Will have to see if RPL_THEMEx is worth it for predictive power.
-  # One big thing to note is that SVI is not available for parks and certain public land uses, so will limit applicability in certain parts of the city
-  
-  # reasonable distance threshold for land use proximity? This is in survey foot (effectively feet)
-  quantile(tree_vars_full_nona$pluto_dist, seq(0, 1, 0.01))
-  # picking 20, this is approx 95% of the remaining trees. Will apply this in the mutate part
-  
   # Collapsed land use
-  tree_vars_full_nona$LandUse_char_collapsed <- tree_vars_full_nona$LandUse_char %>% as.character()
-  x <- tree_vars_full_nona$LandUse_char_collapsed %>%
+  tree_vars_full$LandUse_char_collapsed <- tree_vars_full$LandUse_char %>% as.character()
+  x <- tree_vars_full$LandUse_char_collapsed %>%
     case_match( "LU_01" ~ "LowDensityResidential",
                 c("LU_02", "LU_03") ~ "HigherDensityResidential",
                 c("LU_04", "LU_05") ~ "CommercialMix",
@@ -95,113 +62,200 @@ tree_vars_full <- left_join(tree_vars, socioeco_vars_select)
                 "LU_08" ~ "PublicInst",
                 "LU_09" ~ "OpenOutdoorRec",
                 "LU_11" ~ "Vacant")
-  tree_vars_full_nona$LandUse_char_collapsed <- as.factor(x)
-  tree_vars_full_nona$LandUse_char_collapsed <- relevel(as.factor(tree_vars_full_nona$LandUse_char_collapsed), "LowDensityResidential") # this is Mike's recommendation for base case, may need to collapse land use classes
+  tree_vars_full$LandUse_char_collapsed <- as.factor(x)
+  tree_vars_full$LandUse_char_collapsed <- relevel(as.factor(tree_vars_full$LandUse_char_collapsed), "LowDensityResidential") # this is Mike's recommendation for base case, may need to collapse land use classes
 
 
 ### create dataframe for analysis ##############################################
-# Format input df as needed
-tree_vars_full_nona_format <- tree_vars_full_nona %>%
+
+tree_vars_full_nona_format <- tree_vars_full %>%
+  #create derived variables and filter out rows
+  mutate(canopy_endstate = case_when( canopy_change == 1 ~ 1,      #1 = no change; assumed survival
+                                      canopy_change == 2 ~ NA,     #2 = canopy gain, not to include in this analysis
+                                      canopy_change == 3 ~ 0)) %>% #3 = canopy loss; assumed mortality
+  filter(!is.na(canopy_endstate)) %>%
   mutate(dbh_cm = tree_dbh * 2.54) %>%  #convert dbh from inches to cm
   filter(dbh_cm > 7.62) %>%  # remove small trees; 7.6 cm is 3 inches listed in Bigelow
   filter(dbh_cm < 300) %>%  #removing trees with a DBH greater than the maximum ever recorded in NYC 
   filter(pluto_dist < 20) %>% # tree distance 
-  mutate(BldgClass_fac = factor(BldgClass), 
-         BldgClass_Group_fac = factor(BldgClass_Group),
+        #   # reasonable distance threshold for land use proximity? This is in survey foot (effectively feet)
+        #   quantile(tree_vars_full_nona$pluto_dist, seq(0, 1, 0.01))
+        # # picking 20, this is approx 95% of the remaining trees. Will apply this in the mutate part
+  mutate(
+         #BldgClass_fac = factor(BldgClass), 
+         #BldgClass_Group_fac = factor(BldgClass_Group),
          in_sandy_zone_bool = as.logical(in_sandy_zone),
          is_B_cons_bool = as.logical(is_B_cons),
          is_S_cons_bool = as.logical(is_S_cons),
-         is_DM_bool = as.logical(is_DM)) %>%
-  select(tree_id, geom, 
+         is_DM_bool = as.logical(is_DM),
+         imp_10_2017 = BD_10_2017 + RD_10_2017 + OI_10_2017 + RR_10_2017,
+         stewardship = case_when(steward == "None" ~ 0,
+                                is.na(steward) ~ 0, #assuming that NA means no signs of stewardship
+                                 steward == "1or2" ~ 1,
+                                 steward == "3or4" ~ 1,
+                                 steward == "4orMore" ~ 1)) %>%
+  select(tree_id, geom,  #only include the variables that will be used in the analysis (to avoid any extra NA values)
          genus, species, 
          canopy_endstate, # dependent variable 
-         tree_dbh, dbh_cm, steward_level, # tree diameter at breast height, number of signs of stewardship
-         BldgClass_fac, BldgClass_Group_fac, LandUse_char, LandUse_char_collapsed, # building type (detailed), building type (high level), land use
+         dbh_cm, 
+         stewardship, # whether there were any signs of stewardship observed
+         LandUse_char_collapsed, #BldgClass_fac, BldgClass_Group_fac, LandUse_char,  # building type (detailed), building type (high level), land use
          in_sandy_zone_bool, # sandy inundation zone
          is_B_cons_bool, is_S_cons_bool, is_DM_bool, # building construction, street construction, building demolition
-         summer_max, summer_min, summer_mean, days_max_27, days_max_32, days_max_35, # temperature
-         TC_10_diff, GS_10_diff, SO_10_diff, WA_10_diff, BD_10_diff, RD_10_diff, OI_10_diff, RR_10_diff, # land cover diff, doing 10 m
-         TC_10_2017, GS_10_2017, SO_10_2017, WA_10_2017, BD_10_2017, RD_10_2017, OI_10_2017, RR_10_2017, # land cover 2017, doing 10 m
-         TC_10_2021, GS_10_2021, SO_10_2021, WA_10_2021, BD_10_2021, RD_10_2021, OI_10_2021, RR_10_2021, # land cover 2021, doing 10 m
-         RPL_THEME1, RPL_THEME2, RPL_THEME3, RPL_THEME3, RPL_THEME4, RPL_THEMES) %>%
-  mutate(imp_10_2021 = BD_10_2017 + RD_10_2017 + OI_10_2017 + RR_10_2017) %>% 
-    separate_wider_delim(., cols = geom, delim = ",", names = c( "lon", "lat")) %>%  #extract coordinates from geom text string 
-    mutate(lat = readr::parse_number(lat),
-           lon = readr::parse_number(lon))
-   
+         summer_mean, #summer_max, summer_min, days_max_27, days_max_32, days_max_35, # temperature
+        # TC_10_diff, GS_10_diff, SO_10_diff, WA_10_diff, BD_10_diff, RD_10_diff, OI_10_diff, RR_10_diff, # land cover diff, doing 10 m
+         imp_10_2017, GS_10_2017, BD_10_2017,  #ORD_10_2017, I_10_2017, RR_10_2017, # land cover 2017, doing 10 m #WA_10_2017, 
+        # TC_10_2021, GS_10_2021, SO_10_2021, WA_10_2021, BD_10_2021, RD_10_2021, OI_10_2021, RR_10_2021, # land cover 2021, doing 10 m
+         RPL_THEME1, RPL_THEME3) %>% # RPL_THEME1, RPL_THEME2, RPL_THEME3, RPL_THEME3, RPL_THEME4, RPL_THEMES) %>%
+            # One big thing to note is that SVI is not available for parks and certain public land uses, so will limit applicability in certain parts of the city
+    separate_wider_delim(., cols = geom, delim = ",", names = c( "x", "y")) %>%  #extract coordinates from geom text string 
+    mutate(y = readr::parse_number(y),
+           x = readr::parse_number(x)) %>% 
+    drop_na()  #remove any rows that have an NA value
     
-# do bins of tree dbh
-#quantile(tree_vars_full_nona_format$tree_dbh, seq(0,1,0.1))
-# Remove small trees
-tree_vars_full_nona_format$tree_dbh_bin <- cut(tree_vars_full_nona_format$tree_dbh, c(3, 6, 9, 12, 18, 24, 500))
-tree_vars_full_nona_format$tree_dbh_bin %>% table()
-# 3 inches is 7.6 cm listed in Bigelow
-
-# Social vulnerability can also be binned
-tree_vars_full_nona_format$RPL_THEME1_bin <- cut(tree_vars_full_nona_format$RPL_THEME1, c(0, 0.25, 0.5, 0.75, 1), include.lowest = TRUE) # just doing these bins for now
-tree_vars_full_nona_format$RPL_THEME2_bin <- cut(tree_vars_full_nona_format$RPL_THEME2, c(0, 0.25, 0.5, 0.75, 1), include.lowest = TRUE) # just doing these bins for now
-tree_vars_full_nona_format$RPL_THEME3_bin <- cut(tree_vars_full_nona_format$RPL_THEME3, c(0, 0.25, 0.5, 0.75, 1), include.lowest = TRUE) # just doing these bins for now
-tree_vars_full_nona_format$RPL_THEME4_bin <- cut(tree_vars_full_nona_format$RPL_THEME4, c(0, 0.25, 0.5, 0.75, 1), include.lowest = TRUE) # *won't use this but for completeness
-tree_vars_full_nona_format$RPL_THEMES_bin <- cut(tree_vars_full_nona_format$RPL_THEMES, c(0, 0.25, 0.5, 0.75, 1), include.lowest = TRUE) # just doing these bins for now
-
 ### including the list of species with enough individuals to analyze ##################
-cut_off_n <- 5000 #cut off number of individuals
-
-#species with a n above that number
-species_n <- 
-  tree_vars_full_nona_format %>% 
-  group_by(species) %>% 
-  summarize(n = n()) %>% 
-  filter(n > cut_off_n) %>% 
-  filter(species != "Acer") #remove the unidentified Acer individuals
-
-#label non-focal species as "other"
-tree_vars_full_nona_format <- tree_vars_full_nona_format %>% 
-  mutate(sp_a = case_when(species %in% species_n$species ~ species,
-                          TRUE ~ "other"))
-
-
-
+  cut_off_n <- 5000 #cut off number of individuals
+  
+  #species with a n above that number
+  species_n <- 
+    tree_vars_full_nona_format %>% 
+    group_by(species) %>% 
+    summarize(n = n()) %>% 
+    filter(n > cut_off_n) %>% 
+    filter(species != "Acer") #remove the unidentified Acer individuals
+  
+  #label non-focal species as "other"
+  tree_vars_full_nona_format <- tree_vars_full_nona_format %>% 
+    mutate(sp_a = case_when(species %in% species_n$species ~ species,
+                            TRUE ~ "other")) %>% 
+    left_join(., species_n) #add the n for the sp_a back to the main dataframe
+  
+### create species level variables ###############################################
+  
+  # #create bins for tree DBH
+  # tree_vars_full_nona_format <-
+  #   tree_vars_full_nona_format %>% 
+  #   group_by(sp_a) %>% 
+  #   mutate(dbh_quintile = as.factor(ntile(dbh_cm, 5)), #calculate survival per quintile or quartile per species
+  #          dbh_decile = as.factor(ntile(dbh_cm, 10))) %>%  
+  #   ungroup() 
+  #str(tree_vars_full_nona_format$dbh_quintile)
+  
+  #save scale numeric variables within species
+  scale_params <-
+    tree_vars_full_nona_format %>% 
+    group_by(sp_a) %>% 
+    select(x, y, dbh_cm, summer_mean, imp_10_2017, GS_10_2017, BD_10_2017, RPL_THEME1, RPL_THEME3) %>% 
+    summarise(across(everything(),
+                     list(mean = ~mean(.x, na.rm=TRUE),
+                          sd   = ~sd(.x,   na.rm=TRUE))))
+  
+  # Apply Z-scaling
+  tree_vars_full_nona_format <- tree_vars_full_nona_format %>% 
+    group_by(sp_a) %>% 
+    mutate(across(c(x, y, dbh_cm, summer_mean, imp_10_2017, GS_10_2017, BD_10_2017, RPL_THEME1, RPL_THEME3),
+                  ~ (.x - mean(.x, na.rm=TRUE)) / sd(.x, na.rm=TRUE),
+                  .names = "{.col}_z")) %>% 
+    ungroup()
+  
+### some last pre-analysis data exploration ########################################
+  # tree_vars_full_nona_format %>% sample_n(10000) %>% 
+  #   ggplot(aes(x = x, y = y, z = RPL_THEME1)) + stat_summary_hex(fun = "mean", binwidth = 1000) + theme_bw() + scale_fill_viridis_c()
+  # 
+  # tree_vars_full_nona_format %>% sample_n(10000) %>% 
+  #   ggplot(aes(x = imp_10_2017, y = RD_10_2017)) + geom_point()
+  # 
+  # cor(tree_vars_full_nona_format$GS_10_2017, tree_vars_full_nona_format2$BD_10_2017)
+  # cor(tree_vars_full_nona_format)
+  # 
+  # numeric_df <- tree_vars_full_nona_format[, sapply(tree_vars_full_nona_format, is.numeric)]
+  # cor_matrix <- cor(numeric_df, use = "complete.obs")
+  
+  
 ### analyzing per species mortality with a glm #####################################
 sp_list <- unique(tree_vars_full_nona_format$sp_a) %>% sort()
+#names(tree_vars_full_nona_format)
 
 #create empty lists to save output
 mort_model_list <- vector("list", length(sp_list))
 fitted_preds_list <- vector("list", length(sp_list))
 
 
-for (i in 1:length(sp_list)){
- # for (i in 12:12){
+
+
+for (i in 1:length(sp_list)){      # for (i in 12:12){
   print(i)
-  sp <- sp_list[i] #sp <- sp_list[12]
-  sp_sub_format <- tree_vars_full_nona_format %>% filter(species == sp_a)
-  mort_model <- glm( canopy_endstate ~ imp_10_2021 + tree_dbh_bin + is_DM_bool + steward_level + in_sandy_zone_bool + LandUse_char_collapsed + 
-                       RPL_THEME1_bin + RPL_THEME2_bin + RPL_THEME3_bin +
-                       imp_10_2021 + steward_level + is_DM_bool, #tree_dbh_bin:is_DM_bool,
+  sp_focal <- sp_list[i] #sp_focal <- sp_list[12]
+  sp_sub_format <- tree_vars_full_nona_format %>% filter(sp_a == sp_focal) # %>% sample_n(1000)
+  
+  
+  # ##trying an INLA model 
+  # 
+  # formula_inla <- canopy_endstate ~ -1 + intercept + summer_mean_z +
+  #   f(spatial, model=spde)
+  # 
+  # fit_inla <- inla(
+  #   formula  = formula_inla,
+  #   family   = "binomial",
+  #   Ntrials  = rep(1, n),                        # binary: always 1
+  #   data     = inla.stack.data(sp_sub_format),
+  #   control.predictor = list(
+  #     A        = inla.stack.A(sp_sub_format),
+  #     compute  = TRUE,                            # compute fitted values
+  #     link     = 1                                # use the model's link function
+  #   ),
+  #   control.family = list(link = "cloglog"),
+  #   control.compute = list(
+  #     dic      = TRUE,
+  #     waic     = TRUE,
+  #     cpo      = TRUE,
+  #     config   = TRUE                             # needed for posterior sampling
+  #   ),
+  #   control.inla = list(
+  #     strategy = "adaptive",                      # better accuracy than "gaussian"
+  #     int.strategy = "eb"                         # empirical Bayes for hyperparams
+  #     # Use int.strategy="grid" for full integration (slower but more accurate)
+  #   ),
+  #   verbose = FALSE
+  # )
+  
+  
+  
+  
+  mort_model <- glm(  canopy_endstate ~ ns(dbh_cm_z, df = 6) + 
+                        stewardship +
+                        LandUse_char_collapsed + 
+                        summer_mean_z +
+                        is_B_cons_bool + is_S_cons_bool + is_DM_bool +
+                        imp_10_2017_z + GS_10_2017_z + BD_10_2017_z + 
+                        RPL_THEME1_z + RPL_THEME3_z, 
                      family = binomial(link = "cloglog"),
                      na.action = na.exclude,
                      data = sp_sub_format)
-  mort_model$species <- sp
+  summary(mort_model)
+  mort_model$species <- sp_focal
   
     #area under the curve, example: mort_model_list[[2]]$roc_curve$auc
       mort_model$roc_curve <- roc(mort_model$model$canopy_endstate, mort_model$fitted.values)
-
+      mort_model$roc_curve
+      
     #model diagnostics
-      sim <- simulateResiduals(mort_model, n = 250)
-      sim_results <- plot(sim)       # QQ plot + residual vs fitted
-        
+      sim <- simulateResiduals(mort_model, n = 1000)
+      #sim_results <- plot(sim)       # QQ plot + residual vs fitted
+      testSpatialAutocorrelation(simulationOutput = sim, x = ~sim$fittedModel$data$x_z, y= ~ sim$fittedModel$data$y_z)
       testDispersion(sim)            # overdispersion test
       testZeroInflation(sim)
       
-      mort_model
+      test <- data.frame(d_resid = residuals(sim), x= sim$fittedModel$data$x, y =sim$fittedModel$data$y)
+      ggplot(test, aes(x = x, y = y, z = d_resid))  + stat_summary_hex(fun = "mean") + theme_bw() + scale_fill_viridis_c()      
       
-sim$scaledResiduals
-testSpatialAutocorrelation(simulationOutput = sim, x = ~sim$fittedModel$data$lon, y= ~ sim$fittedModel$data$lat)
+      #create a semivariogram
+      
+      # tree_vars_full_nona_format %>% sample_n(10000) %>% 
+      #   ggplot(aes(x = x, y = y, z = RPL_THEME1)) + stat_summary_hex(fun = "mean", binwidth = 1000) + theme_bw() + scale_fill_viridis_c()
 
-      sim$fittedModel$data$lat
   #save mortality model
   mort_model_list[[i]] <- mort_model
-
 
   
   ## extract fitted values from model -------------------------------
@@ -210,9 +264,9 @@ testSpatialAutocorrelation(simulationOutput = sim, x = ~sim$fittedModel$data$lon
   
   tree_vars_fitted_focal <- 
   tree_vars_full_nona_format %>% 
-    filter( sp_a == sp) %>% 
+    filter( sp_a == sp_focal) %>% 
     mutate(pred_fit = predict.glm(object = mort_model, newdata = ., type = "response")) %>% 
-    select(tree_id, lat, lon, species, sp_a, tree_dbh, pred_fit, canopy_endstate)
+    select(tree_id, y, x, species, sp_a, tree_dbh, pred_fit, canopy_endstate)
   
       #save predictions for the focal species
       fitted_preds_list[[i]] <- tree_vars_fitted_focal
@@ -406,15 +460,15 @@ future_preds %>%
             pred_surv_median = median(pred_surv, na.rm = TRUE))
   
 
-ggplot(future_preds, aes(x = lon, y = lat)) + geom_hex() + facet_wrap(~sp_a) + theme_bw() + scale_fill_viridis_c()
+ggplot(future_preds, aes(x = x, y = lat)) + geom_hex() + facet_wrap(~sp_a) + theme_bw() + scale_fill_viridis_c()
 
-ggplot(future_preds, aes(x = lon, y = lat, z = pred_surv)) + stat_summary_hex(fun = median, bins = 30) + facet_wrap(~sp_a) + theme_bw() + scale_fill_viridis_c()
+ggplot(future_preds, aes(x = x, y = lat, z = pred_surv)) + stat_summary_hex(fun = median, bins = 30) + facet_wrap(~sp_a) + theme_bw() + scale_fill_viridis_c()
 
 # 
 # 
 # 
 # #predicted future mortality risk - should be pretty similar to previous figure
-# ggplot(future_preds, aes(x = lon, y = lat, z = pred_surv)) + 
+# ggplot(future_preds, aes(x = x, y = lat, z = pred_surv)) + 
 #   stat_summary_hex(fun = median, bins = 150) + #facet_wrap(~sp_a) + 
 #   scale_fill_viridis_c(option = "turbo", direction = -1, name = "median survival (%)") + xlab("longitude") + ylab("latitude") + 
 #   theme_bw() + 
@@ -427,7 +481,7 @@ ggplot(future_preds, aes(x = lon, y = lat, z = pred_surv)) + stat_summary_hex(fu
 #         axis.ticks = element_blank())
 
 #SI X: map of tree sample size by species
-ggplot(future_preds, aes(x = lon, y = lat, z = pred_surv)) + 
+ggplot(future_preds, aes(x = x, y = lat, z = pred_surv)) + 
   geom_hex() + facet_wrap(~sp_a) + theme_bw() + 
   scale_fill_viridis_c(option = "turbo", name = "n") + xlab("longitude") + ylab("latitude") + 
   theme(strip.text = element_text(face = "italic"),
