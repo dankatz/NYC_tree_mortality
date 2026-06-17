@@ -8,7 +8,7 @@ library(tidyverse)
 library(data.table)
 library(ResourceSelection) # hoslem.test
 library(pROC)
-library(ciTools) #install.packages("DHARMa")
+library(ciTools) 
 library(sf)
 library(basemaps)
 library(terra)
@@ -109,7 +109,7 @@ tree_vars_full_nona_format <- tree_vars_full %>%
          RPL_THEME1, RPL_THEME3) %>% # RPL_THEME1, RPL_THEME2, RPL_THEME3, RPL_THEME3, RPL_THEME4, RPL_THEMES) %>%
             # One big thing to note is that SVI is not available for parks and certain public land uses, so will limit applicability in certain parts of the city
     separate_wider_delim(., cols = geom, delim = ",", names = c( "x", "y")) %>%  #extract coordinates from geom text string 
-    mutate(y = readr::parse_number(y),
+    mutate(y = readr::parse_number(y), #crs = 2263 
            x = readr::parse_number(x)) %>% 
     drop_na()  #remove any rows that have an NA value
     
@@ -159,9 +159,13 @@ tree_vars_full_nona_format <- tree_vars_full %>%
     ungroup()
   
 ### some last pre-analysis data exploration ########################################
-  # tree_vars_full_nona_format %>% sample_n(10000) %>% 
+  # tree_vars_full_nona_format %>% sample_n(10000) %>%
   #   ggplot(aes(x = x, y = y, z = RPL_THEME1)) + stat_summary_hex(fun = "mean", binwidth = 1000) + theme_bw() + scale_fill_viridis_c()
-  # 
+
+  tree_vars_full_nona_format %>% #sample_n(100000) %>%
+    ggplot(aes(x = x, y = y)) + geom_hex(binwidth = 1000) + theme_bw() + scale_fill_viridis_c()
+
+  
   # tree_vars_full_nona_format %>% sample_n(10000) %>% 
   #   ggplot(aes(x = imp_10_2017, y = RD_10_2017)) + geom_point()
   # 
@@ -181,54 +185,43 @@ mort_model_list <- vector("list", length(sp_list))
 fitted_preds_list <- vector("list", length(sp_list))
 
 
-
-
+#run model for focal species
 for (i in 1:length(sp_list)){      # for (i in 12:12){
   print(i)
-  sp_focal <- sp_list[i] #sp_focal <- sp_list[12]
-  sp_sub_format <- tree_vars_full_nona_format %>% filter(sp_a == sp_focal) # %>% sample_n(1000)
-  
-  
-  # ##trying an INLA model 
-  # 
-  # formula_inla <- canopy_endstate ~ -1 + intercept + summer_mean_z +
-  #   f(spatial, model=spde)
-  # 
-  # fit_inla <- inla(
-  #   formula  = formula_inla,
-  #   family   = "binomial",
-  #   Ntrials  = rep(1, n),                        # binary: always 1
-  #   data     = inla.stack.data(sp_sub_format),
-  #   control.predictor = list(
-  #     A        = inla.stack.A(sp_sub_format),
-  #     compute  = TRUE,                            # compute fitted values
-  #     link     = 1                                # use the model's link function
-  #   ),
-  #   control.family = list(link = "cloglog"),
-  #   control.compute = list(
-  #     dic      = TRUE,
-  #     waic     = TRUE,
-  #     cpo      = TRUE,
-  #     config   = TRUE                             # needed for posterior sampling
-  #   ),
-  #   control.inla = list(
-  #     strategy = "adaptive",                      # better accuracy than "gaussian"
-  #     int.strategy = "eb"                         # empirical Bayes for hyperparams
-  #     # Use int.strategy="grid" for full integration (slower but more accurate)
-  #   ),
-  #   verbose = FALSE
-  # )
-  
-  
-  
-  
+  sp_focal <- sp_list[i] #sp_focal <- sp_list[6]
+  sp_sub_format <- tree_vars_full_nona_format %>% filter(sp_a == sp_focal) %>%  #
+     group_by(x, y) %>% filter(n() == 1) %>%  ungroup() %>%  #remove some rows that have duplicated location information
+    filter(!is.na(y))
+    
+          # #first trying with a spatial subsampling approach
+          # sp_sub_format_sf <- st_as_sf(sp_sub_format, coords = c("x", "y"), crs = 2263, remove = FALSE)
+          # grid <- st_make_grid(sp_sub_format_sf,
+          #                      cellsize = 10,      # 100 m = 328.084 ft
+          #                      what     = "polygons",
+          #                      square   = FALSE)  %>%   # FALSE for hexagonal grid #plot(grid)
+          #   st_sf() %>%
+          #   mutate(grid_id = row_number())
+          # 
+          # # Spatial join points to find which grid cell they fall into
+          # points_with_grid <- st_join(sp_sub_format_sf, grid, join = st_intersects)
+          # 
+          # # sample a subset of points
+          # sampled_points <- points_with_grid %>%
+          #   filter(!is.na(grid_id)) %>%
+          #   group_by(grid_id) %>%
+          #   slice_sample(n = 1) %>%
+          #   ungroup()
+
+        sp_sub_format <- sampled_points
+
   mort_model <- glm(  canopy_endstate ~ ns(dbh_cm_z, df = 6) + 
                         stewardship +
-                        LandUse_char_collapsed + 
+                        LandUse_char_collapsed +
                         summer_mean_z +
+                        in_sandy_zone_bool + 
                         is_B_cons_bool + is_S_cons_bool + is_DM_bool +
-                        imp_10_2017_z + GS_10_2017_z + BD_10_2017_z + 
-                        RPL_THEME1_z + RPL_THEME3_z, 
+                        imp_10_2017_z + GS_10_2017_z + BD_10_2017_z +
+                        RPL_THEME1_z + RPL_THEME3_z,
                      family = binomial(link = "cloglog"),
                      na.action = na.exclude,
                      data = sp_sub_format)
@@ -240,17 +233,46 @@ for (i in 1:length(sp_list)){      # for (i in 12:12){
       mort_model$roc_curve
       
     #model diagnostics
-      sim <- simulateResiduals(mort_model, n = 1000)
+      sim <- simulateResiduals(mort_model, n = 250)
       #sim_results <- plot(sim)       # QQ plot + residual vs fitted
-      testSpatialAutocorrelation(simulationOutput = sim, x = ~sim$fittedModel$data$x_z, y= ~ sim$fittedModel$data$y_z)
+      sim_sub <- data.frame(scaledResiduals = residuals(sim), x = sim$fittedModel$data$x, y = sim$fittedModel$data$y) #%>%  sample_n(1000)
+      
+      
+      #look at spatial autocorrelation
+      #dharma_resids <- data.frame(d_resid = residuals(sim), x= sim$fittedModel$data$x, y =sim$fittedModel$data$y)
+      # ggplot(dharma_resids, aes(x = x, y = y, z = d_resid))  + stat_summary_hex(fun = "mean", binwidth = 1000) + theme_bw() +
+      #   scale_fill_viridis_c() + scale_x_continuous(limits = c(980000, 1000000)) + scale_y_continuous(limits = c(200000, 230000))
+      # 
+      # ggplot(dharma_resids, aes(x = x, y = y, z = d_resid))  + stat_summary_hex(fun = "mean", binwidth = 5000) + theme_bw() + scale_fill_viridis_c() 
+        #scale_x_continuous(limits = c(1000000, 1050000)) + scale_y_continuous(limits = c(160000, 200000))
+      
+      #create a semivariogram
+      dharma_resids_sf <- st_as_sf(dharma_resids, coords = c("x","y"), crs = 2263)
+      vario <- gstat::variogram(d_resid ~ 1, data = dharma_resids_sf, cutoff = 25000, width = 100) #, alpha=c(0,45,90,135)
+      ggplot(vario, aes(x = dist, y = gamma, color = as.factor(dir.hor))) + geom_point() + theme_bw() + facet_wrap(~dir.hor)
+      
+      ggplot(sim_sub, aes(x = x, y =y, color = scaledResiduals)) + geom_point() + scale_color_viridis_c()
+      ggplot(sp_sub_format, aes(x = x, y = y, z = canopy_endstate))  + stat_summary_hex(fun = "sum", binwidth = 500) + theme_bw() + scale_fill_viridis_c(trans = "log10") 
+      ggplot(sp_sub_format, aes(x = x, y = y, z = canopy_endstate  ))  + stat_summary_hex(fun = "mean", binwidth = 1000) + theme_bw() + scale_fill_viridis_c() 
+      ggplot(dharma_resids, aes(x = x, y = y, z = d_resid  ))  + stat_summary_hex(fun = "mean", binwidth = 500) + theme_bw() + scale_fill_viridis_c(option = "turbo") 
+      
+     
+      testSpatialAutocorrelation(simulationOutput = sim, x = sim$fittedModel$data$x, y = sim$fittedModel$data$y)
+  
+      
+    #trying moranfast because the built-in test (via ape) is too slow
+      resid_vals <- residuals(sim)
+      coords <- cbind(sp_sub_format$x, sp_sub_format$y)
+      nb <- spdep::dnearneigh(coords, d1 = 0, d2 = 5000)  # d in CRS units
+      w  <- nb2listw(nb, style = "W")
+      moran_result <- moranfast(x = resid_vals, w)
+      print(moran_result)
+      test <- moranfast(x = resid_vals, c1 = sp_sub_format$x, c2 = sp_sub_format$y)
+      
       testDispersion(sim)            # overdispersion test
       testZeroInflation(sim)
       
-      test <- data.frame(d_resid = residuals(sim), x= sim$fittedModel$data$x, y =sim$fittedModel$data$y)
-      ggplot(test, aes(x = x, y = y, z = d_resid))  + stat_summary_hex(fun = "mean") + theme_bw() + scale_fill_viridis_c()      
-      
-      #create a semivariogram
-      
+        
       # tree_vars_full_nona_format %>% sample_n(10000) %>% 
       #   ggplot(aes(x = x, y = y, z = RPL_THEME1)) + stat_summary_hex(fun = "mean", binwidth = 1000) + theme_bw() + scale_fill_viridis_c()
 
@@ -363,7 +385,7 @@ ggsave(paste0(your_path_for_box, "tree_mortality/NYC_st_tree_results/fig_2.png")
 ### Fig 4: map of predicted survival by species #######################################################
 
 #project the predictions to the crs of the basemap tile (3857)
-fitted_preds_sf <- st_as_sf(fitted_preds, crs = 2263, coords = c("lon", "lat")) %>% 
+fitted_preds_sf <- st_as_sf(trees, crs = 2263, coords = c("x", "y")) %>% 
             st_transform(., crs = 3857) %>% 
             bind_cols(st_coordinates(.) %>% as.data.frame())
   
@@ -379,11 +401,11 @@ nyc_topo_spatrast <- rast(nyc_topo_rast) #convert to spatrast for plotting
 #create figure
 fig_pred_fit <- ggplot() + ggthemes::theme_few() +   
   geom_spatraster_rgb(data = nyc_topo_spatrast) +
-  stat_summary_hex(data = fitted_preds_sf, aes(x = X, y = Y, z = pred_fit), fun = median, bins = 40) +
-  facet_wrap(~sp_a, ncol = 6) +
+  stat_summary_hex(data = fitted_preds_sf, aes(x = X, y = Y, z = fitted_p), fun = median, bins = 40) +
+  #facet_wrap(~sp_a, ncol = 6) +
   scale_fill_viridis_c(option = "turbo", direction = -1, name = "predicted \nmedian \nsurvival (%)") + xlab("") + ylab("") + 
   theme(strip.text = element_text(face = "italic"),
-        legend.position = c(0.92, 0.14),
+        legend.position = c(0.14, 0.7), #legend.position = c(0.92, 0.14),
         legend.background = element_rect(fill = "white", color = "grey80"),
         panel.grid.major = element_blank(),  
         panel.grid.minor = element_blank(),
