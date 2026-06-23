@@ -4,10 +4,11 @@
 
 
 #### set up work environment and load data #####################################
-library(tidyverse)
+#library(tidyverse)
 library(here)
 library(ggplot2)
 library(dplyr)
+library(tidyr)
 library(data.table)
 library(ResourceSelection) 
 library(pROC)
@@ -181,10 +182,10 @@ tree_vars_full_nona_format <- tree_vars_full %>%
   # tree_vars_full_nona_format %>% sample_n(10000) %>%
   #   ggplot(aes(x = x, y = y, z = RPL_THEME1)) + stat_summary_hex(fun = "mean", binwidth = 1000) + theme_bw() + scale_fill_viridis_c()
 
-  #map of tree samples across NYC
-  tree_vars_full_nona_format %>% 
-    filter(sp_a == "Quercus palustris") %>% #sample_n(100000) %>%
-    ggplot(aes(x = x, y = y)) + geom_hex(binwidth = 5000) + theme_bw() + scale_fill_viridis_c()
+  # #map of tree samples across NYC
+  # tree_vars_full_nona_format %>% 
+  #   filter(sp_a == "Quercus palustris") %>% #sample_n(100000) %>%
+  #   ggplot(aes(x = x, y = y)) + geom_hex(binwidth = 5000) + theme_bw() + scale_fill_viridis_c()
 
 
   # tree_vars_full_nona_format %>% sample_n(10000) %>% 
@@ -207,8 +208,8 @@ sp_df <- data.frame(sp = sp_list, model = as.character(1:length(sp_list)))
   roc_list <- vector("list", length(sp_list))
 
 #run model for focal species
-for (i in 1:length(sp_list)){      
-#for (i in 1:5){
+#for (i in 1:length(sp_list)){      
+for (i in 1:2){
  
   sp_focal <- sp_list[i] #sp_focal <- sp_list[6]
   print(paste(i, sp_focal))
@@ -251,11 +252,11 @@ for (i in 1:length(sp_list)){
   
   ## ---- Model components and formula ---------------------------------------
   cmp <- canopy_endstate ~ Intercept(1) +
-    stewardship(stewardship, model = "linear") + 
-    is_B_cons_bool(is_B_cons_bool, model = "linear") + 
-    is_S_cons_bool(is_S_cons_bool, model = "linear") + 
-    is_DM_bool(is_DM_bool, model = "linear") + 
-    in_sandy_zone_bool(in_sandy_zone_bool, model = "linear") + 
+    stewardship(stewardship, model = "linear") +
+    is_B_cons_bool(is_B_cons_bool, model = "linear") +
+    is_S_cons_bool(is_S_cons_bool, model = "linear") +
+    is_DM_bool(is_DM_bool, model = "linear") +
+    in_sandy_zone_bool(in_sandy_zone_bool, model = "linear") +
     RPL_THEME1_z(RPL_THEME1_z, model = "linear") +
     summer_mean_z(summer_mean_z, model = "linear") +
     imp_10_2017_z(imp_10_2017_z, model = "linear") +
@@ -273,7 +274,7 @@ for (i in 1:length(sp_list)){
   lik <- like(
     formula = canopy_endstate ~ .,
     family  = "binomial",
-    data    = trees_sf,
+    data    = trees,
     Ntrials = 1,
     control.family = list(link = "cloglog")
   )
