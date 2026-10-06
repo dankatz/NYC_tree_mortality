@@ -30,7 +30,7 @@ trees_sf <- st_as_sf( sp_sub_format, coords = c("x", "y"), remove = FALSE) %>%
 
 ## ---- 2.2 Mesh and SPDE (Matern with PC priors) ------------------------------
 #load in nyc boundary polygon
-nyc_boundary <- st_read(file.path(Sys.getenv("NYC_BOX_DIR", "C:/Users/dsk273/Box/Katz lab/NYC/"), "nyc_boundary_polygon/nybb.shp")) %>%
+nyc_boundary <- st_read("data/nyc_boundary_polygon/nybb.shp") %>%
   st_union() %>% #combine the different boroughs
   st_transform(., crs = 2263)
 nyc.bdry <-  as(nyc_boundary, "Spatial") %>% fm_as_segm()

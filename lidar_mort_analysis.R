@@ -52,9 +52,9 @@ library(kableExtra)
 library(gt)
 
 
-your_path_for_box <- Sys.getenv("NYC_BOX_DIR", "C:/Users/dsk273/Box/Katz lab/NYC/")
-tree_vars <- fread(paste0(your_path_for_box, '/tree_mortality_variables/all_variables_v2.csv'))
-socioeco_vars <- fread(paste0(your_path_for_box,'/tree_mortality_variables/model_df_socioeco.csv'))
+data_dir <- "data"
+tree_vars <- fread(file.path(data_dir, "tree_mortality_variables/all_variables_v2.csv"))
+socioeco_vars <- fread(file.path(data_dir, "tree_mortality_variables/model_df_socioeco.csv"))
 
 
 # merge tree and socioeconomic variables
@@ -64,7 +64,7 @@ socioeco_vars_select <- socioeco_vars %>% select(tree_id, #medincomeE has too ma
 tree_vars_full <- left_join(tree_vars, socioeco_vars_select) 
 
 #load in nyc boundary polygon and save in the format needed by fmesher
-nyc_boundary <- st_read(file.path(your_path_for_box, "nyc_boundary_polygon/nybb.shp")) %>%
+nyc_boundary <- st_read(file.path(data_dir, "nyc_boundary_polygon/nybb.shp")) %>%
   st_union() %>% #combine the different boroughs
   st_transform(., crs = 2263)
 nyc.bdry <-  as(nyc_boundary, "Spatial") %>% fm_as_segm()
@@ -257,7 +257,7 @@ tree_vars_full_nona_format <- tree_vars_full %>%
     mutate(annual_surv = annual_surv * 100)
   
   #add common names
-  common_name_lookup <- read_csv(paste0(your_path_for_box,'/tree_mortality_variables/common_name_lookup.csv')) %>% 
+  common_name_lookup <- read_csv(file.path(data_dir, "tree_mortality_variables/common_name_lookup.csv")) %>%
     rename(sp_a = species)
   table_1 <- left_join(table_1, common_name_lookup) %>% 
     select(sp_a, common_name, n, median_dbh, annual_surv)

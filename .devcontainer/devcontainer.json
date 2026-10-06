@@ -26,12 +26,10 @@
     }
   },
   "mounts": [
-    "source=claude-code-config-nyc-tree-mortality,target=/home/rstudio/.claude,type=volume",
-    "source=C:/Users/dsk273/Box/Katz lab/NYC,target=/mnt/box_nyc,type=bind"
+    "source=claude-code-config-nyc-tree-mortality,target=/home/rstudio/.claude,type=volume"
   ],
   "containerEnv": {
-    "CLAUDE_CONFIG_DIR": "/home/rstudio/.claude",
-    "NYC_BOX_DIR": "/mnt/box_nyc"
+    "CLAUDE_CONFIG_DIR": "/home/rstudio/.claude"
   },
   "forwardPorts": [8787, 8788],
   "portsAttributes": {
