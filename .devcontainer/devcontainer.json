@@ -1,0 +1,49 @@
+{
+  "image": "ghcr.io/rocker-org/devcontainer/r-ver:4",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {},
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {},
+    "ghcr.io/rocker-org/devcontainer-features/rstudio-server:latest": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "REditorSupport.r",
+        "REditorSupport.r-lsp",
+        "rdebugger.r-debugger"
+      ],
+      "settings": {
+        "[r]": {
+          "editor.wordSeparators": "`~!@#%$^&*()-=+[{]}\\|;:'\",<>/?"
+        },
+        "r.rterm.linux": "/usr/local/bin/radian",
+        "r.bracketedPaste": true,
+        "r.plot.useHttpgd": true,
+        "r.session.useWebServer": true,
+        "r.session.watchGlobalEnvironment": true,
+        "r.workspaceViewer.showObjectSize": false
+      }
+    }
+  },
+  "mounts": [
+    "source=claude-code-config-nyc-tree-mortality,target=/home/rstudio/.claude,type=volume",
+    "source=C:/Users/dsk273/Box/Katz lab/NYC,target=/mnt/box_nyc,type=bind"
+  ],
+  "containerEnv": {
+    "CLAUDE_CONFIG_DIR": "/home/rstudio/.claude",
+    "NYC_BOX_DIR": "/mnt/box_nyc"
+  },
+  "forwardPorts": [8787, 8788],
+  "portsAttributes": {
+    "8787": {
+      "label": "RStudio Server",
+      "onAutoForward": "openBrowser"
+    },
+    "8788": {
+      "label": "httpgd Plot Viewer",
+      "onAutoForward": "notify"
+    }
+  },
+  "postCreateCommand": "sudo chown -R rstudio:rstudio /home/rstudio/.claude && echo /usr/local/lib/R/lib | sudo tee /etc/ld.so.conf.d/rstudio-r.conf && sudo ldconfig && (grep -q '^rsession-which-r=' /etc/rstudio/rserver.conf || echo 'rsession-which-r=/usr/local/bin/R' | sudo tee -a /etc/rstudio/rserver.conf) && cp ${containerWorkspaceFolder}/.devcontainer/Rprofile /home/rstudio/.Rprofile && sudo apt-get update && sudo apt-get install -y libglpk-dev",
+  "postStartCommand": "sudo USER=rstudio LOGNAME=rstudio HOME=/home/rstudio rserver --server-daemonize=1 || true"
+}

@@ -1,0 +1,35 @@
+if (Sys.getenv("TERM_PROGRAM") == "vscode") {
+  makeActiveBinding(".First.sys", local({
+    val <- get(".First.sys", envir = globalenv())
+    invoked <- FALSE
+    function(v) {
+      if (missing(v)) {
+        return(val)
+      }
+      val <<- v
+      if (!invoked && is.function(v)) {
+        invoked <<- TRUE
+        v()
+      }
+      invisible(val)
+    }
+  }), env = globalenv())
+
+  .vsc_port_in_use <- function(port, host = "127.0.0.1") {
+    con <- tryCatch(
+      suppressWarnings(socketConnection(host = host, port = port, timeout = 1, blocking = TRUE, open = "r+")),
+      error = function(e) NULL
+    )
+    if (is.null(con)) {
+      FALSE
+    } else {
+      close(con)
+      TRUE
+    }
+  }
+
+  if (requireNamespace("httpgd", quietly = TRUE) && !.vsc_port_in_use(8788)) {
+    try(httpgd::hgd(port = 8788, token = FALSE, silent = TRUE), silent = TRUE)
+  }
+  rm(.vsc_port_in_use)
+}

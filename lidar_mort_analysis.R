@@ -52,7 +52,7 @@ library(kableExtra)
 library(gt)
 
 
-your_path_for_box <- "C:/Users/dsk273/Box/Katz lab/NYC/"
+your_path_for_box <- Sys.getenv("NYC_BOX_DIR", "C:/Users/dsk273/Box/Katz lab/NYC/")
 tree_vars <- fread(paste0(your_path_for_box, '/tree_mortality_variables/all_variables_v2.csv'))
 socioeco_vars <- fread(paste0(your_path_for_box,'/tree_mortality_variables/model_df_socioeco.csv'))
 
@@ -64,7 +64,7 @@ socioeco_vars_select <- socioeco_vars %>% select(tree_id, #medincomeE has too ma
 tree_vars_full <- left_join(tree_vars, socioeco_vars_select) 
 
 #load in nyc boundary polygon and save in the format needed by fmesher
-nyc_boundary <- st_read( "C:/Users/dsk273/Box/Katz lab/NYC/nyc_boundary_polygon/nybb.shp") %>%
+nyc_boundary <- st_read(file.path(your_path_for_box, "nyc_boundary_polygon/nybb.shp")) %>%
   st_union() %>% #combine the different boroughs
   st_transform(., crs = 2263)
 nyc.bdry <-  as(nyc_boundary, "Spatial") %>% fm_as_segm()
@@ -714,7 +714,7 @@ fig_map_resid <-
 # theme(  legend.position = c(0.1, 0.9),  # Places the legend at the top-left corner
 #         legend.justification = c(0.1, 0.9)) # Aligns the legend box to its top-left corner)+
 
-ggsave(fig_map_resid, filename = paste0(your_path_for_box, "tree_mortality/NYC_st_tree_results/SI_resid_mapb.png"),
+ggsave(fig_map_resid, filename = "output/SI_resid_mapb.png",
        width = 10, height = 6.5, units = "in", dpi = 400)
 
 
