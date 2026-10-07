@@ -1,0 +1,4 @@
+# Normalize line endings to LF in the repo and working tree
+* text=auto eol=lf
+*.docx binary
+*.png binary

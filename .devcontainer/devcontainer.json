@@ -42,6 +42,6 @@
       "onAutoForward": "notify"
     }
   },
-  "postCreateCommand": "sudo chown -R rstudio:rstudio /home/rstudio/.claude && echo /usr/local/lib/R/lib | sudo tee /etc/ld.so.conf.d/rstudio-r.conf && sudo ldconfig && (grep -q '^rsession-which-r=' /etc/rstudio/rserver.conf || echo 'rsession-which-r=/usr/local/bin/R' | sudo tee -a /etc/rstudio/rserver.conf) && cp ${containerWorkspaceFolder}/.devcontainer/Rprofile /home/rstudio/.Rprofile && sudo apt-get update && sudo apt-get install -y libglpk-dev",
+  "postCreateCommand": "sudo chown -R rstudio:rstudio /home/rstudio/.claude && echo /usr/local/lib/R/lib | sudo tee /etc/ld.so.conf.d/rstudio-r.conf && sudo ldconfig && (grep -q '^rsession-which-r=' /etc/rstudio/rserver.conf || echo 'rsession-which-r=/usr/local/bin/R' | sudo tee -a /etc/rstudio/rserver.conf) && cp ${containerWorkspaceFolder}/.devcontainer/Rprofile /home/rstudio/.Rprofile && sudo apt-get update && sudo apt-get install -y libglpk-dev libicu-dev libx11-dev make cmake libabsl-dev libssl-dev libgdal-dev gdal-bin libgeos-dev libproj-dev libsqlite3-dev libudunits2-dev libcurl4-openssl-dev libmagick++-dev gsfonts libpng-dev libjpeg-dev pandoc libuv1-dev libfontconfig1-dev libfreetype6-dev libfribidi-dev libharfbuzz-dev libxml2-dev libnode-dev && cd ${containerWorkspaceFolder} && Rscript -e 'renv::restore(prompt = FALSE)'",
   "postStartCommand": "sudo USER=rstudio LOGNAME=rstudio HOME=/home/rstudio rserver --server-daemonize=1 || true"
 }
