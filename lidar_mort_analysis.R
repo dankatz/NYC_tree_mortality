@@ -42,6 +42,7 @@ library(scales)
 library(INLA)
 library(inlabru)
 library(fmesher)
+library(sn) #needed by INLA::inla.posterior.sample (joint posterior draws of the fixed effects)
 
 #library(ResourceSelection) 
 library(pROC)
@@ -141,11 +142,8 @@ tree_vars_full_nona_format <- tree_vars_full %>%
          #BldgClass_Group_fac = factor(BldgClass_Group),
          in_sandy_zone_bool = as.logical(in_sandy_zone),
          is_B_cons_bool = as.logical(is_B_cons_10m_17_21), #construction during the 2017-2021 lidar interval
-         # TEMPORARY: is_S_cons_10m_17_21 appears inverted in v4 (TRUE for 88% of trees vs 6.8% for 2013-17); flipped pending confirmation from Ging-Yan
-         is_S_cons_bool = !as.logical(is_S_cons_10m_17_21),
          is_DM_bool = as.logical(is_DM_10m_17_21),
          is_B_cons_1317_bool = as.logical(is_B_cons_10m_13_17), #construction 2013-2017, before the lidar interval (lagged damage)
-         is_S_cons_1317_bool = as.logical(is_S_cons_10m_13_17),
          is_DM_1317_bool = as.logical(is_DM_10m_13_17),
          is_LU_lowdensres = case_when(LandUse_char_collapsed == "LowDensityResidential" ~ 1, .default = 0),
          is_LU_hidensres = case_when(LandUse_char_collapsed == "HigherDensityResidential" ~ 1, .default = 0),
@@ -178,8 +176,8 @@ tree_vars_full_nona_format <- tree_vars_full %>%
          #LandUse_char_collapsed, #BldgClass_fac, BldgClass_Group_fac, LandUse_char,  # building type (detailed), building type (high level), land use
          is_LU_lowdensres, is_LU_hidensres, is_LU_comm, is_LU_indust, is_LU_publicinst, is_LU_outdoorrec, is_LU_vacant, is_LU_noparcel,
          in_sandy_zone_bool, # sandy inundation zone
-         is_B_cons_bool, is_S_cons_bool, is_DM_bool, # building construction, street construction, building demolition (2017-2021)
-         is_B_cons_1317_bool, is_S_cons_1317_bool, is_DM_1317_bool, # same, 2013-2017
+         is_B_cons_bool, is_DM_bool, # building construction, building demolition (2017-2021); street construction not used (data problems)
+         is_B_cons_1317_bool, is_DM_1317_bool, # same, 2013-2017
          summer_max, summer_min, # temperature: daytime max and nighttime min (r = 0.11); mean and heat-day counts omitted
         # TC_10m_diff, GS_10m_diff, SO_10m_diff, WA_10m_diff, BD_10m_diff, RD_10m_diff, OI_10m_diff, RR_10m_diff, # land cover diff, doing 10 m
         imp_5_2017, GS_5m_2017, BD_5m_2017, TC_5m_2017, 
@@ -191,7 +189,7 @@ tree_vars_full_nona_format <- tree_vars_full %>%
         pop_100m_log, # population density
         TC_100m_2017, # neighborhood tree canopy (not the focal crown, which dominates 5-15 m buffers)
         # TC_10m_2021, GS_10m_2021, SO_10m_2021, WA_10m_2021, BD_10m_2021, RD_10m_2021, OI_10m_2021, RR_10m_2021, # land cover 2021, doing 10 m
-         RPL_THEME1) %>% # RPL_THEME1, RPL_THEME2, RPL_THEME3, RPL_THEME3, RPL_THEME4, RPL_THEMES) %>%
+         RPL_THEME1, RPL_THEME3) %>% # SVI socioeconomic status and racial/ethnic minority status themes; RPL_THEME1, RPL_THEME2, RPL_THEME3, RPL_THEME3, RPL_THEME4, RPL_THEMES) %>%
             # One big thing to note is that SVI is not available for parks and certain public land uses, so will limit applicability in certain parts of the city
     separate_wider_delim(., cols = geom, delim = ",", names = c( "x", "y")) %>%  #extract coordinates from geom text string 
     mutate(y = readr::parse_number(y), #crs = 2263 
@@ -248,7 +246,7 @@ tree_vars_full_nona_format <- tree_vars_full %>%
   #str(tree_vars_full_nona_format$dbh_quintile)
   
   #save scale parameters for numeric variables, pooled across all taxa so that 1 SD is the same raw change for every species
-  scale_vars <- c("summer_max", "summer_min", "imp_vis_10_2017", "TC_100m_2017", "pop_100m_log", "RPL_THEME1")
+  scale_vars <- c("summer_max", "summer_min", "imp_vis_10_2017", "TC_100m_2017", "pop_100m_log", "RPL_THEME1", "RPL_THEME3")
   scale_params <-
     tree_vars_full_nona_format %>% 
     select(all_of(scale_vars)) %>% 
@@ -395,7 +393,8 @@ sp_df <- data.frame(sp = sp_list, model = as.character(1:length(sp_list)))
 ## Mesh and SPDE (Matern with PC priors), shared by all taxa; all distances in meters ------------------------------
   mesh <- fm_mesh_2d_inla(
     boundary = nyc.bdry, #loaded at start of script
-    max.edge = c(200, 2000), #200 m inside the city (~range/2.5 vs the 500 m range prior); 100 m (217k vertices) failed in INLA; coarse in the outer extension
+    crs      = fm_crs(crs_m), #same CRS as the tree points and the NYC boundary (needed e.g. to mask the field-map pixel grid)
+    max.edge = c(100, 2000), #100 m inside the city (~range/5 vs the 500 m range prior; fitted ranges ~150-450 m); coarse in the outer extension
     offset   = c(-0.01, 3000), #negative = relative to boundary; outer extension avoids edge effects
     cutoff   = 50
   )
@@ -413,14 +412,23 @@ sp_df <- data.frame(sp = sp_list, model = as.character(1:length(sp_list)))
 
   lidar_interval_yr <- 4 #years between the 2017 and 2021 lidar flights; enters as an exposure offset
 
-#full fits are large (latent field + config), so each is saved to disk and only a small summary is kept in memory;
-#if a taxon's summary file already exists the fit is skipped, so an interrupted run can be resumed
-  fit_dir <- "output/fits"
+#each taxon's results are saved as a small summary file (coefficients, fitted values, spatial field map);
+#if a taxon's summary file already exists the fit is skipped, so an interrupted run can be resumed.
+#full fits on the 100 m mesh are 4-6 GB each, so they are only saved if requested
+  fit_dir <- Sys.getenv("FIT_DIR", "output/fits_100m")
   dir.create(fit_dir, showWarnings = FALSE, recursive = TRUE)
   fit_file <- function(sp, type) file.path(fit_dir, paste0(gsub("[^A-Za-z]+", "_", sp), "_", type, ".rds"))
+  save_full_fit <- FALSE
+
+#pixel grid over NYC for the spatial field maps: the posterior mean and SD at the mesh vertices are interpolated to each pixel
+#(the mean is exact; the interpolated SD is an approximation that is adequate for mapping)
+  field_grid <- fm_pixels(mesh, dims = c(300, 300), mask = nyc_boundary, format = "sf")
+  field_xy <- st_coordinates(field_grid)
+  field_A <- fm_evaluator(mesh, loc = field_xy)
 
 #create empty lists to save output
   mort_model_list <- vector("list", length(sp_list))
+  field_list <- vector("list", length(sp_list))
   trees_model_list <- vector("list", length(sp_list))
   roc_list <- vector("list", length(sp_list))
 
@@ -437,6 +445,7 @@ for (i in which(sp_list %in% taxa_to_fit)){
     mort_model_list[[i]] <- fit_summary$model
     trees_model_list[[i]] <- fit_summary$trees
     roc_list[[i]] <- fit_summary$roc
+    field_list[[i]] <- fit_summary$field
     next
   }
   
@@ -444,10 +453,10 @@ for (i in which(sp_list %in% taxa_to_fit)){
     
   trees <- sp_sub_format %>% 
     mutate(log_exposure = log(lidar_interval_yr)) %>% 
-    select(tree_id, mort, log_exposure, stewardship, is_B_cons_bool, is_S_cons_bool, is_DM_bool,
-           is_B_cons_1317_bool, is_S_cons_1317_bool, is_DM_1317_bool,
+    select(tree_id, mort, log_exposure, stewardship, is_B_cons_bool, is_DM_bool,
+           is_B_cons_1317_bool, is_DM_1317_bool,
            is_LU_hidensres, is_LU_comm, is_LU_indust, is_LU_publicinst, is_LU_outdoorrec, is_LU_vacant, is_LU_noparcel, #LowDensityResidential is the reference
-           dbh_cm, summer_max_z, summer_min_z, imp_vis_10_2017_z, TC_100m_2017_z, pop_100m_log_z, RPL_THEME1_z, in_sandy_zone_bool,
+           dbh_cm, summer_max_z, summer_min_z, imp_vis_10_2017_z, TC_100m_2017_z, pop_100m_log_z, RPL_THEME1_z, RPL_THEME3_z, in_sandy_zone_bool,
            near_park_10m, #NYCHA proximity removed: too few flagged trees per taxon
            x, y) %>% 
     mutate(across(where(is.logical), as.numeric))
@@ -462,13 +471,12 @@ for (i in which(sp_list %in% taxa_to_fit)){
     exposure(log_exposure, model = "offset") + #intercept is then a log annual hazard
     stewardship(stewardship, model = "linear", mean.linear = 0, prec.linear = 1) +
     is_B_cons_bool(is_B_cons_bool, model = "linear", mean.linear = 0, prec.linear = 1) +
-    is_S_cons_bool(is_S_cons_bool, model = "linear", mean.linear = 0, prec.linear = 1) +
     is_DM_bool(is_DM_bool, model = "linear", mean.linear = 0, prec.linear = 1) +
     is_B_cons_1317_bool(is_B_cons_1317_bool, model = "linear", mean.linear = 0, prec.linear = 1) +
-    is_S_cons_1317_bool(is_S_cons_1317_bool, model = "linear", mean.linear = 0, prec.linear = 1) +
     is_DM_1317_bool(is_DM_1317_bool, model = "linear", mean.linear = 0, prec.linear = 1) +
     in_sandy_zone_bool(in_sandy_zone_bool, model = "linear", mean.linear = 0, prec.linear = 1) +
     RPL_THEME1_z(RPL_THEME1_z, model = "linear", mean.linear = 0, prec.linear = 1) +
+    RPL_THEME3_z(RPL_THEME3_z, model = "linear", mean.linear = 0, prec.linear = 1) +
     summer_max_z(summer_max_z, model = "linear", mean.linear = 0, prec.linear = 1) +
     summer_min_z(summer_min_z, model = "linear", mean.linear = 0, prec.linear = 1) +
     near_park_10m(near_park_10m, model = "linear", mean.linear = 0, prec.linear = 1) +
@@ -508,7 +516,8 @@ for (i in which(sp_list %in% taxa_to_fit)){
     cmp,
     lik,
     options = bru_options(
-      control.compute = list(dic = TRUE, waic = TRUE, cpo = TRUE, config = TRUE),
+      control.compute = list(dic = TRUE, waic = TRUE, cpo = TRUE, config = TRUE), #config needed to draw joint posterior samples below
+      #(control.fixed = list(correlation.matrix = TRUE) would be simpler, but it makes bru() fail)
       verbose = FALSE, num.threads = "8:1" #8 threads: same estimates as 16, ~30% less memory, slightly faster
     )
   )
@@ -517,15 +526,34 @@ for (i in which(sp_list %in% taxa_to_fit)){
   
   ### saving data from focal species
   fit$sp <- sp_focal
-  saveRDS(fit, fit_file(sp_focal, "fit")) #full fit, needed for predict() (e.g., spatial field maps)
+  if (save_full_fit) saveRDS(fit, fit_file(sp_focal, "fit")) #full fit, needed for predict()
+  
+  #for attribution analyses: joint posterior draws of the fixed effects (rows = terms, columns = draws)
+  fixed_names <- rownames(fit$summary.fixed)
+  fixed_draws <- inla.posterior.sample(n = 1000, result = fit, num.threads = "8:1",
+                                       selection = setNames(as.list(rep(1, length(fixed_names))), fixed_names))
+  fixed_draws <- sapply(fixed_draws, function(d) d$latent[, 1])
+  rownames(fixed_draws) <- fixed_names
+
+  field_nodes <- fit$summary.random$spatial_field #posterior summary at each mesh vertex
+  field_list[[i]] <- tibble(sp = sp_focal, x = field_xy[, "X"], y = field_xy[, "Y"],
+                            mean = fm_evaluate(field_A, field = field_nodes$mean),
+                            sd   = fm_evaluate(field_A, field = field_nodes$sd))
+
   mort_model_list[[i]] <- list(sp = sp_focal, #small version of the fit used by the figures below
                                summary.fixed = fit$summary.fixed,
                                summary.hyperpar = fit$summary.hyperpar,
                                summary.random = list(dbh_smooth = fit$summary.random$dbh_smooth),
                                waic = fit$waic[c("waic", "p.eff")],
-                               dic = fit$dic[c("dic", "p.eff")])
+                               dic = fit$dic[c("dic", "p.eff")],
+                               #for attribution: joint posterior draws and correlation of the fixed effects; each tree's linear
+                               #predictor (log 4-year hazard, including the exposure offset) is saved with the tree data below
+                               fixed_draws = fixed_draws,
+                               fixed_correlation = cor(t(fixed_draws)))
   
   trees$fitted_p <- fit$summary.fitted.values$mean[1:nrow(trees)] #predicted probability of canopy loss over the 4-year interval
+  trees$eta_mean <- fit$summary.linear.predictor$mean[1:nrow(trees)] #linear predictor (cloglog scale), for attribution analyses
+  trees$eta_sd   <- fit$summary.linear.predictor$sd[1:nrow(trees)]
   trees$resid    <- trees$mort - trees$fitted_p
   trees$sp <- sp_focal
   trees_join <- left_join(trees, sp_sub_format %>% select(tree_id, sp_a, species, genus), by = "tree_id")
@@ -536,7 +564,7 @@ for (i in which(sp_list %in% taxa_to_fit)){
   roc_curve$sp <- sp_focal
   roc_list[[i]] <- roc_curve
   
-  saveRDS(list(model = mort_model_list[[i]], trees = trees_join, roc = roc_curve), fit_file(sp_focal, "summary"))
+  saveRDS(list(model = mort_model_list[[i]], trees = trees_join, roc = roc_curve, field = field_list[[i]]), fit_file(sp_focal, "summary"))
   rm(fit, lik, trees_sf); gc() #free the full fit before the next taxon
   
 } #end species loop model run
@@ -584,7 +612,7 @@ for (i in which(sp_list %in% taxa_to_fit)){
   # 
   # p_binned
    
-### Fig 4: Forest plot of fixed effects ########################################
+### Figs 4-6 and S1: forest plots of fixed effects (Fig 4 cross-taxa overview; Figs 5, 6, S1 by taxon) ########
   # term labels and display order, grouped by construct; continuous terms are per 1 SD (pooled across taxa)
   term_labels <- c(
     stewardship         = "Stewardship (any signs)",
@@ -592,8 +620,6 @@ for (i in which(sp_list %in% taxa_to_fit)){
     is_B_cons_bool      = "Building construction 2017-21",
     is_DM_1317_bool     = "Demolition 2013-17",
     is_DM_bool          = "Demolition 2017-21",
-    is_S_cons_1317_bool = "Street construction 2013-17",
-    is_S_cons_bool      = "Street construction 2017-21 *",
     imp_vis_10_2017_z   = "Impervious share of visible ground (+1 SD)",
     TC_100m_2017_z      = "Tree canopy within 100 m (+1 SD)",
     summer_max_z        = "Summer max temperature (+1 SD)",
@@ -608,7 +634,8 @@ for (i in which(sp_list %in% taxa_to_fit)){
     is_LU_vacant        = "Land use: vacant",
     is_LU_noparcel      = "Land use: not near a tax parcel",
     pop_100m_log_z      = "Population within 100 m (+1 SD, log)",
-    RPL_THEME1_z        = "SVI socioeconomic theme (+1 SD)")
+    RPL_THEME1_z        = "SVI socioeconomic theme (+1 SD)",
+    RPL_THEME3_z        = "SVI racial & ethnic minority theme (+1 SD)")
   
   coef_df <- map_dfr(
     mort_model_list,
@@ -631,7 +658,7 @@ for (i in which(sp_list %in% taxa_to_fit)){
     tibble(estimate = as.numeric(m$b), lower = m$ci.lb, upper = m$ci.ub,
            tau = sqrt(m$tau2), I2 = m$I2, pi_lower = pr$pi.lb, pi_upper = pr$pi.ub, k = m$k)
   }
-  meta_df <- coef_df %>% group_by(term) %>% group_modify(~ meta_fit(.x)) %>% ungroup() %>% mutate(sp = "All taxa (RE mean)")
+  meta_df <- coef_df %>% group_by(term) %>% group_modify(~ meta_fit(.x)) %>% ungroup() %>% mutate(sp = "All taxa (meta-analysis)")
   meta_df
   
   # SI sensitivity check: related taxa may respond alike, so add a genus random effect above taxon
@@ -647,45 +674,84 @@ for (i in which(sp_list %in% taxa_to_fit)){
   meta_sensitivity
   write_csv(meta_sensitivity, "output/SI_meta_genus_sensitivity.csv")
   
-  # taxa ordered by sample size (largest at top), with the meta-analytic mean above them
-  sp_n <- tree_vars_full_nona_format %>% count(sp_a) %>% arrange(n)
-  sp_levels <- c(sp_n$sp_a, "All taxa (RE mean)")
+  # y-axis order (same in every figure): meta-analytic mean at the top, taxa alphabetically (so genera group together), "other" last
+  meta_label <- "All taxa (meta-analysis)"
+  taxa_alpha <- sort(setdiff(unique(coef_df$sp), "other"))
+  sp_levels <- c("other", rev(taxa_alpha), meta_label) #ggplot draws the first level at the bottom
   forest_df <- bind_rows(coef_df %>% mutate(type = "Taxon"), meta_df %>% mutate(type = "Mean across taxa")) %>% 
     mutate(sp = factor(sp, levels = sp_levels),
-           term = factor(term_labels[term], levels = term_labels),
            type = factor(type, levels = c("Taxon", "Mean across taxa")))
   
-  hr_breaks <- function(lims) { b <- pretty(lims, n = 4); b[b > 0] } #readable hazard-ratio ticks within each panel's range
+  # italicize genus and species names only, e.g. "Acer (other spp.)" -> italic Acer + plain "(other spp.)"
+  taxon_labels <- function(x) parse(text = case_when(
+    x %in% c("other", meta_label)     ~ paste0("'", x, "'"),
+    grepl(" \\(other spp\\.\\)$", x)  ~ paste0("italic('", sub(" .*", "", x), "')~'(other spp.)'"),
+    grepl(" spp\\.$", x)              ~ paste0("italic('", sub(" .*", "", x), "')~'spp.'"),
+    TRUE                              ~ paste0("italic('", x, "')")))
   
-  p_forest <- ggplot(forest_df, aes(x = exp(estimate), y = sp, colour = type, shape = type)) +
-    geom_vline(xintercept = 1, colour = "grey60", linewidth = 0.3) +
-    geom_linerange(aes(xmin = exp(lower), xmax = exp(upper)), linewidth = 0.5) +
-    geom_point(size = 1.6) +
-    scale_x_log10(breaks = hr_breaks) +
-    scale_y_discrete(labels = function(x) parse(text = ifelse(x %in% c("other", "All taxa (RE mean)"), #italicize species names only
-                                                              paste0("'", x, "'"), paste0("italic('", x, "')")))) +
-    scale_colour_manual(values = c("Taxon" = "#2a78d6", "Mean across taxa" = "#eb6834"), name = NULL) +
-    scale_shape_manual(values = c("Taxon" = 16, "Mean across taxa" = 18), name = NULL) +
-    facet_wrap(~term, ncol = 4, scales = "free_x", labeller = label_wrap_gen(width = 32)) +
-    labs(
-      title = "Figure 4. Effects of drivers on street tree mortality",
-      subtitle = "Hazard ratio (log scale) with 95% credible interval; one spatial Bernoulli GLMM (cloglog link) per taxon",
-      caption = "Mean across taxa: random-effects meta-analysis (REML, Knapp-Hartung 95% CI). Continuous drivers: per 1 SD, pooled across taxa.\nLand use is relative to low-density residential. * 2017-21 street construction indicator flipped pending confirmation (see ANALYSIS_PLAN.md).",
-      x = "Hazard ratio", y = NULL
-    ) +
-    theme_minimal(base_size = 9) +
-    theme(panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(),
-          panel.grid.major.x = element_line(colour = "#e6e5e0", linewidth = 0.3),
-          strip.text = element_text(face = "bold", hjust = 0),
-          axis.text.y = element_text(size = 6.5),
-          legend.position = "top", legend.justification = "left",
-          plot.caption = element_text(hjust = 0, colour = "#52514e"),
-          plot.background = element_rect(fill = "white", colour = NA))
+  #readable hazard-ratio ticks within each panel's range: doubling steps on wide log axes,
+  #intermediate steps on medium axes, evenly spaced on narrow ones
+  hr_breaks <- function(lims) {
+    ratio <- lims[2] / lims[1]
+    b <- if (ratio > 6) c(0.125, 0.25, 0.5, 1, 2, 4, 8, 16)
+         else if (ratio > 1.8) c(0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6)
+         else pretty(lims, n = 4)
+    b[b >= lims[1] & b <= lims[2] & b > 0]
+  }
+  hr_labels <- function(x) format(x, drop0trailing = TRUE, trim = TRUE)
   
-  p_forest
-  ggsave(p_forest, filename = "output/Fig4_forest_by_taxon.png", width = 11, height = 15, dpi = 300)
+  forest_caption <- "Hazard ratio (log scale) with 95% credible interval from one spatial Bernoulli GLMM (cloglog link) per taxon. Mean across taxa: random-effects\nmeta-analysis (REML, Knapp-Hartung 95% CI). Continuous drivers: per 1 SD, pooled across taxa."
   
-  # compact version: mean across taxa only, one row per driver
+  # one forest plot for a set of drivers; facets follow the order of `terms`
+  plot_forest <- function(terms, title, ncol = 4, shared_x = FALSE, note = NULL) {
+    forest_df %>% 
+      filter(term %in% terms) %>% 
+      mutate(term = factor(term_labels[term], levels = term_labels[terms])) %>% 
+      ggplot(aes(x = exp(estimate), y = sp, colour = type, shape = type)) +
+      geom_vline(xintercept = 1, colour = "grey60", linewidth = 0.3) +
+      geom_linerange(aes(xmin = exp(lower), xmax = exp(upper)), linewidth = 0.5) +
+      geom_point(size = 1.6) +
+      scale_x_log10(breaks = hr_breaks, labels = hr_labels) +
+      scale_y_discrete(labels = taxon_labels) +
+      scale_colour_manual(values = c("Taxon" = "#2a78d6", "Mean across taxa" = "#eb6834"), name = NULL) +
+      scale_shape_manual(values = c("Taxon" = 16, "Mean across taxa" = 18), name = NULL) +
+      facet_wrap(~term, ncol = ncol, scales = if (shared_x) "fixed" else "free_x", labeller = label_wrap_gen(width = 30)) +
+      labs(title = title, caption = paste(c(forest_caption, note), collapse = "\n"), x = "Hazard ratio", y = NULL) +
+      theme_minimal(base_size = 9) +
+      theme(panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(),
+            panel.grid.major.x = element_line(colour = "#e6e5e0", linewidth = 0.3),
+            strip.text = element_text(face = "bold", hjust = 0),
+            panel.spacing.x = unit(1.5, "lines"), #keeps tick labels of neighboring panels from running together
+            axis.text.y = element_text(size = 7),
+            legend.position = "top", legend.justification = "left",
+            plot.caption = element_text(hjust = 0, colour = "#52514e"),
+            plot.background = element_rect(fill = "white", colour = NA))
+  }
+  
+  # Fig 5, construction and demolition: rows = period (lagged 2013-17, concurrent 2017-21), columns = building construction, demolition;
+  # shared x-axis (all binary). Street construction is not analyzed (data problems that could not be resolved)
+  p_forest_construction <- plot_forest(
+    c("is_B_cons_1317_bool", "is_DM_1317_bool", "is_B_cons_bool", "is_DM_bool"),
+    title = "Figure 5. Effects of nearby building construction and demolition on street tree mortality", ncol = 2, shared_x = TRUE)
+  p_forest_construction
+  ggsave(p_forest_construction, filename = "output/Fig5_forest_construction.png", width = 7.5, height = 8.5, dpi = 300)
+  
+  # Fig 6, site, environment, stewardship and social context
+  p_forest_site <- plot_forest(
+    c("stewardship", "imp_vis_10_2017_z", "TC_100m_2017_z", "in_sandy_zone_bool", "summer_max_z", "summer_min_z", "pop_100m_log_z", "RPL_THEME1_z", "RPL_THEME3_z"),
+    title = "Figure 6. Effects of stewardship, site, environment and social context on street tree mortality", ncol = 3)
+  p_forest_site
+  ggsave(p_forest_site, filename = "output/Fig6_forest_site_env_social.png", width = 9.5, height = 12, dpi = 300)
+  
+  # Fig S1 (SI): land use and park proximity
+  p_forest_landuse <- plot_forest(
+    c("is_LU_hidensres", "is_LU_comm", "is_LU_indust", "is_LU_publicinst", "is_LU_outdoorrec", "is_LU_vacant", "is_LU_noparcel", "near_park_10m"),
+    title = "Figure S1. Effects of adjacent land use and park proximity on street tree mortality", ncol = 4,
+    note = "Land use is relative to low-density (one/two-family) residential.")
+  p_forest_landuse
+  ggsave(p_forest_landuse, filename = "output/FigS1_forest_landuse_park.png", width = 11, height = 8.5, dpi = 300)
+  
+  # Fig 4, overview (precedes the by-taxon figures): mean across taxa only, one row per driver
   p_forest_mean <- meta_df %>% 
     mutate(term = factor(term_labels[term], levels = rev(term_labels))) %>% 
     ggplot(aes(x = exp(estimate), y = term)) +
@@ -693,43 +759,40 @@ for (i in which(sp_list %in% taxa_to_fit)){
     geom_linerange(aes(xmin = exp(lower), xmax = exp(upper)), colour = "#eb6834", linewidth = 0.6) +
     geom_point(colour = "#eb6834", shape = 18, size = 2.5) +
     scale_x_log10(breaks = c(0.8, 0.9, 1, 1.25, 1.5, 2, 2.5)) +
-    labs(title = "Mean effect across taxa (random-effects meta-analysis)",
-         subtitle = sprintf("Hazard ratio with 95%% CI (REML, Knapp-Hartung); %d taxa", length(unique(coef_df$sp))),
+    labs(title = "Figure 4. Mean effect of each driver across taxa",
+         subtitle = sprintf("Hazard ratio with 95%% CI; random-effects meta-analysis (REML, Knapp-Hartung) of %d taxa", length(unique(coef_df$sp))),
          x = "Hazard ratio (log scale)", y = NULL) +
     theme_minimal(base_size = 10) +
     theme(panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(),
           plot.background = element_rect(fill = "white", colour = NA))
   
   p_forest_mean
-  ggsave(p_forest_mean, filename = "output/Fig4_forest_mean.png", width = 7, height = 5.5, dpi = 300)
+  ggsave(p_forest_mean, filename = "output/Fig4_cross_taxa_means.png", width = 7, height = 5.5, dpi = 300)
   
-  write_csv(bind_rows(coef_df, meta_df), "output/Fig4_coefficients.csv")
+  write_csv(bind_rows(coef_df, meta_df), "output/forest_coefficients.csv")
   
 ### SI X: Spatial random field map ---------------------------------------------
   
-  #all taxa share one mesh; i_field picks the taxon to map
-  i_field <- 1
-  field_fit <- readRDS(fit_file(sp_list[i_field], "fit"))
-  field_pred <- predict(
-    field_fit,
-    fm_pixels(mesh, dims = c(300, 300), mask = nyc_boundary),
-    ~ spatial_field
-  ) %>% 
-    cbind(., st_coordinates(.))
+  #posterior mean of each taxon's spatial field on the pixel grid saved in the loop; log hazard ratio relative to the city-wide
+  #baseline after accounting for the drivers (> 0: higher mortality than the drivers explain)
+  field_df <- bind_rows(field_list) %>% mutate(sp = factor(sp, levels = c(sort(setdiff(unique(sp), "other")), "other")))
+
+  p_field <- ggplot(field_df) +
+    geom_tile(aes(x = x, y = y, fill = mean)) + #tile rather than raster: pixel centers are not exactly evenly spaced
+    geom_sf(data = nyc_boundary, fill = NA, colour = "grey40", linewidth = 0.15) +
+    scale_fill_gradient2(low = "#2a78d6", mid = "#f0efec", high = "#e34948", midpoint = 0,
+                         limits = c(-2, 2), oob = squish, name = "spatial effect\n(log hazard ratio)") +
+    facet_wrap(~sp, ncol = 6) +
+    coord_sf(crs = crs_m, datum = NA) +
+    labs(title = "Estimated spatial random effect (SPDE) by taxon", x = NULL, y = NULL) +
+    theme_minimal(base_size = 8) +
+    theme(strip.text = element_text(face = "italic"), legend.position = "bottom",
+          plot.background = element_rect(fill = "white", colour = NA))
+
+  p_field
+  ggsave(p_field, filename = "output/SI_spatial_field_by_taxon.png", width = 11, height = 9, dpi = 300)
   
-  
-  p_field <- ggplot() +
-    gg(field_pred, aes(color = mean)) +
-    
-    scale_color_viridis_c() +
-    #coord_equal() +
-    labs(title = paste("Estimated spatial random effect (SPDE):", sp_list[i_field]),
-         x = "Easting (m)", y = "Northing (m)") +
-    theme_minimal(base_size = 11)
-  
-  p_field + geom_sf(data = nyc_boundary, fill = NA) # + geom_point(data = trees, aes(x = x, y = y), size = 0.4, colour = "white", alpha = 0.5) +
-  
-### Fig 5: map of predicted mortality by individual tree #######################################################
+### Fig 7: map of predicted mortality by individual tree #######################################################
  tree_preds <- bind_rows(trees_model_list)
   
 
