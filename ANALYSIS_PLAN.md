@@ -56,7 +56,7 @@ The "direction" column gives the hypothesized effect on mortality. All candidate
 | Stewardship | − | `steward` (recorded 2015) | **Binary:** any signs vs. none. Only 3% of trees have 3 or more signs (`output/SI_stewardship_levels.png`) |
 | Building construction | + | `is_B_cons_{10,15,20,30}m_13_17`; `is_B_cons_10m_17_21` | **Both windows, 10 m,** as separate terms. See note A |
 | Demolition | + | `is_DM_{10,15,20,30}m_13_17`; `is_DM_10m_17_21` | Both windows, 10 m. **Kept as a variable of interest** despite being rare (1.1% and 0.5% of trees). Every demolition tree is also flagged for building construction in the same window, so the coefficient is the extra effect of demolition beyond construction |
-| Street construction | + | `is_S_cons_{5,10,15}m_13_17`; `is_S_cons_10m_17_21` | Both windows, 10 m. **The 2017–21 indicator is flipped (TEMPORARY):** as delivered it flags 88% of trees, which looks inverted. Flipped, it flags 11.7%. **[ASK G-Y]** Dan has emailed to confirm; remove the flip if a corrected file arrives |
+| Street construction | + | `is_S_cons_{5,10,15}m_13_17`; `is_S_cons_10m_17_21` | **Removed (2026-10-07).** Ging-Yan confirmed problems with these variables that cannot be fixed; neither window is used |
 | Surface cover around the stem (2017) | + | `{RD,OI,RR,BD,GS,SO,WA}_{10,15}m_2017` | **Impervious share of visible ground,** 10 m, with a 15 m fallback. See note B. No separate grass term |
 | Neighborhood canopy (2017) | ? | `TC_{25,50,75,100}m_2017` | **100 m.** Not 5–15 m, which mostly measures the focal tree's own crown |
 | Heat | + | `summer_mean/max/min`, `days_max_{27,32,35}` | **`summer_max` + `summer_min`.** See note C |
@@ -65,9 +65,9 @@ The "direction" column gives the hypothesized effect on mortality. All candidate
 | Public housing | + | `near_NYCHA_{5,10,15}m` | **Removed.** Only 0.64% of trees are flagged at 10 m, and 12 of 19 taxa have fewer than 10 canopy losses among flagged trees |
 | Park adjacency | − | `near_park_{5,10,15}m` | **10 m.** Trees 10–15 m away are often across the street. A possible measurement-choice comparison across all taxa (5/10/15 m) |
 | Human activity | + | `pop_{50,100,150,200}m` | **100 m,** log(1 + x) |
-| Socioeconomic vulnerability | + | `RPL_THEME1–4`, `RPL_THEMES`, ACS % variables | **`RPL_THEME1`** (socioeconomic status). Median income is a possible SI sensitivity check only (missing for 9.8% of trees) |
+| Socioeconomic vulnerability | + | `RPL_THEME1–4`, `RPL_THEMES`, ACS % variables | **`RPL_THEME1` (socioeconomic status) + `RPL_THEME3` (racial and ethnic minority status).** These are two distinct aspects of neighborhood disadvantage (r = 0.63; each is estimated holding the other constant). Theme 3 is a proxy for structural inequities, not a direct cause. ACS % non-white duplicates theme 3 (r = 0.93) and is not used. Median income is a possible SI sensitivity check only (missing for 9.8% of trees) |
 
-This gives **23 fixed-effect terms** plus the DBH smooth and the spatial field. The smallest taxon (*Ulmus americana*, about 480 canopy losses) has about 20 losses per term.
+This gives **21 driver terms plus the intercept**, the DBH smooth and the spatial field. The smallest model (*Liquidambar styraciflua*, 366 canopy losses) has about 17 losses per term.
 
 **Excluded as predictors, because they are partly the outcome:** all `*_2021` land cover, all `*_diff` change variables, and `TC_{5,10,15}m_2017`. Including them would let the outcome leak into the predictors.
 
@@ -113,9 +113,13 @@ These are made **once for all taxa**. The defaults in the table are fixed a prio
 - **Spatial field:** Matérn SPDE with PC priors.
   - Work in **meters**: project to EPSG:32118 (NAD83 / New York Long Island, m) instead of EPSG:2263 (feet).
   - **Decided:** range prior P(range < 500 m) = 0.05. The covariates capture most effects at the scale of a block face, so the field should mainly capture neighborhood-scale processes. The SI shows sensitivity at 250 m and 1 km.
-  - Proposed SD prior: P(σ > 1) = 0.05 on the cloglog scale, which allows roughly a 7-fold difference in hazard between neighborhoods. The current prior is P(σ > 1.5) = 0.05.
-  - The mesh inner `max.edge` is about 100 m (about range/5), with `cutoff` and the outer extension also in meters. `trees_sf` gets an explicit CRS. **Correction:** a 100 m mesh over NYC's 783 km² has about 217,000 vertices, not the ~90k estimated earlier. A test fit on that mesh failed inside INLA (not out of memory; cause not yet diagnosed). **Current setting: `max.edge` = 200 m** (about range/2.5), to be revisited later, for example a finer mesh or INLA settings that make 100 m work.
-- **Software:** inlabru/INLA, with WAIC, CPO and `config` computed.
+  - **Decided:** SD prior P(σ > 1) = 0.05 on the cloglog scale, which allows roughly a 7-fold difference in hazard between neighborhoods. It is weak; the data can override it (fitted σ ≈ 1.2).
+  - **Mesh: inner `max.edge` = 100 m** (about range/5; fitted ranges at 200 m were ~150–450 m), with `cutoff` 50 m and a 3 km outer extension. The mesh is built on the borough boundary buffered 500 m and simplified 150 m, which avoids sliver triangles; that had caused the earlier INLA failures. It has 250,254 vertices. One shared mesh for all taxa. `trees_sf` gets an explicit CRS.
+  - Cost per taxon at 100 m: about 16 min and about 30 GB RAM (smallest taxon). This needs the WSL memory raised to about 52 GB. All 21 taxa take roughly 8–10 h.
+  - The earlier 200 m fits are kept in `output/fits/` for comparison.
+- **Software:** inlabru/INLA (8 threads), with WAIC and CPO computed.
+- **Saved results:** each taxon's summary (coefficients, hyperparameters, DBH smooth, WAIC/DIC, tree-level fitted values, ROC, spatial-field map) goes to `output/fits_100m/<taxon>_summary.rds`. Full fits at 100 m are 4–6 GB each, too large for the disk, so they are not saved by default (`save_full_fit <- FALSE`), and INLA's `config` (needed only for `predict()` on a saved fit) is then not computed.
+  - The spatial-field map is the posterior mean and SD at the mesh vertices, interpolated to a 300 × 300 pixel grid. The mean is exact; the SD is approximate.
 
 ## 5. Synthesis across species
 
@@ -143,14 +147,20 @@ These are made **once for all taxa**. The defaults in the table are fixed a prio
 
 ## 8. Outputs
 
-| Item | Content |
-|---|---|
-| Table 1 | Taxa, n, observed 4-year and annual mortality |
-| Fig 2 | Mortality versus DBH, by taxon |
-| Fig 3 | Map of observed mortality |
-| Fig 4 | Forest plot by driver and taxon, with the meta-analytic mean |
-| Fig 5 | Maps of risk for individual trees, from cross-validated or full-model predictions |
-| SI | Sample flow; predictor correlations; sensitivity to measurement choices; spatial field maps; cross-validation and calibration; the loss-check results |
+| Item | Content | File |
+|---|---|---|
+| Fig 1 | (manuscript figure, e.g. study area; not produced by the script) | |
+| Table 1 | Taxa, n, median DBH, observed 4-year and annual mortality | |
+| Fig 2 | Mortality versus DBH, by taxon | |
+| Fig 3 | Map of observed mortality, by taxon | |
+| Fig 4 | Mean effect of every driver across taxa (meta-analysis overview) | `output/Fig4_cross_taxa_means.png` |
+| Fig 5 | By taxon: building construction and demolition, 2013–17 and 2017–21 (2 × 2, shared axis) | `output/Fig5_forest_construction.png` |
+| Fig 6 | By taxon: stewardship, impervious share, canopy within 100 m, Sandy zone, summer max and min, population, SVI | `output/Fig6_forest_site_env_social.png` |
+| Fig 7 | Maps of predicted risk for individual trees | |
+| Fig S1 | By taxon: land use classes and park proximity | `output/FigS1_forest_landuse_park.png` |
+| SI | Sample flow; predictor correlations; meta-analysis genus sensitivity; sensitivity to measurement choices; spatial field maps; cross-validation and calibration; the loss-check results | `output/SI_*` |
+
+In the by-taxon figures, the y-axis order is "All taxa (meta-analysis)" at the top, then taxa alphabetically (so genera group together), then "other". Coefficients behind Figs 4–6 and S1 are in `output/forest_coefficients.csv`.
 
 ## 9. Code changes needed before refitting
 
@@ -158,7 +168,7 @@ These are made **once for all taxa**. The defaults in the table are fixed a prio
 - [x] Model terms as in section 3: land use (7 terms plus not-near-parcel), heat pair, impervious share of visible ground, 100 m canopy and population, both construction windows, park 10 m; NYCHA and grass removed.
 - [x] Unidentified *Acer* go into "other" (the script already did this; only the comment said "remove").
 - [x] Drop `RPL_THEME3` from the kept columns (it isn't a model term).
-- [ ] Remove the TEMPORARY street-construction flip if Ging-Yan sends a corrected file.
+- [x] Street construction removed entirely (no longer needs the flip).
 - [x] Add the explicit `status == "Alive"` filter, and build the sample-flow table (`output/SI_sample_flow.csv`).
 - [x] Recode the response to `mort` and add the exposure offset.
 - [x] Convert coordinates to meters with an explicit CRS. Re-specify the mesh and priors in meters. One mesh is shared by all taxa, built on a buffered, simplified borough boundary.
@@ -194,9 +204,14 @@ These are made **once for all taxa**. The defaults in the table are fixed a prio
 | 2026-10-06 | Population and neighborhood canopy at 100 m (population as log(1 + x)) |
 | 2026-10-06 | Construction and demolition, both windows, at 10 m; demolition kept as a variable of interest |
 | 2026-10-06 | Land cover: single term, impervious share of visible ground (10 m, 15 m fallback); no separate grass term |
-| 2026-10-06 | 2017–21 street construction flipped, pending Ging-Yan's confirmation (TEMPORARY) |
+| 2026-10-06 | ~~2017–21 street construction flipped, pending Ging-Yan's confirmation (TEMPORARY)~~ (superseded 2026-10-07) |
 | 2026-10-06 | Mesh `max.edge` 200 m for now (100 m mesh failed in INLA); revisit later |
 | 2026-10-07 | Mesh failures traced to sliver triangles from the coastline; boundary now buffered 500 m and simplified 150 m, `cutoff` 50 m |
 | 2026-10-07 | INLA run with 8 threads (same estimates as 16, less memory) |
 | 2026-10-07 | Meta-analysis: `metafor` REML + Knapp–Hartung, "other" included; genus/taxon multilevel model as SI; prediction intervals reported in the table but not on the figures |
 | 2026-10-07 | Taxa: species models (> 5,000 trees) plus genus models for the remaining trees of a genus (> 5,000); 17 species + 3 genus models + "other" = 21; no exceptions (Chinese elm not separated) |
+| 2026-10-07 | Figures: Fig 4 cross-taxa overview; by-taxon forest plots split into Fig 5 (construction), Fig 6 (stewardship, site, environment, social) and Fig S1 (land use, park); taxa ordered alphabetically, "other" last, meta-analysis on top |
+| 2026-10-07 | Mesh `max.edge` 100 m (WSL memory raised to ~50 GB); results in `output/fits_100m/`; full fits not saved (disk), spatial-field maps saved per taxon instead |
+| 2026-10-07 | Social context: SVI theme 1 (socioeconomic) and theme 3 (racial/ethnic minority status); no ACS variables in the main model |
+| 2026-10-07 | Street construction (both windows) removed from the analysis and figures: unresolvable data problems (per Ging-Yan) |
+| 2026-10-07 | Spatial SD prior P(σ > 1) = 0.05 confirmed; summaries also save the fixed-effect correlation matrix and each tree's linear predictor (for attribution) |
