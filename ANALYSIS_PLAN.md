@@ -148,6 +148,33 @@ These are made **once for all taxa**. The defaults in the table are fixed a prio
 - In-sample AUC is reported only alongside cross-validated AUC, never on its own.
 - Hosmer–Lemeshow is dropped; with n ≈ 40k per taxon it rejects almost any model.
 
+## 6b. Attribution of losses to modifiable drivers (done 2026-10-20)
+
+- **Question:** what share of observed 2017–21 canopy losses is *associated with* each modifiable driver under the fitted models. This is associational, not causal.
+- **Groups and reference levels** (exposure is only reduced, never increased):
+  - construction and demolition (4 indicators) → none nearby
+  - lack of stewardship → stewardship present
+  - impervious share of visible ground → 10th percentile (pooled across taxa)
+  - Sandy zone → outside the zone
+- **Held at observed values (context):** land use, canopy within 100 m, heat, SVI themes, population and park proximity.
+  - Land use is not attributed because it is less of a focus for this manuscript.
+  - Canopy deficit was tried and **dropped (2026-10-20)**. It was the largest group (about 18%), but it is hard to interpret: its size depended mostly on how far the 90th-percentile reference shifts nearly every tree.
+  - No 25th/75th-percentile sensitivity analysis unless reviewers ask.
+- **Method:** each tree's posterior-mean linear predictor is shifted by β × (counterfactual − observed) for the groups switched off. Expected losses come from the sum of the 4-year loss probabilities. Shapley averaging over all 2⁴ subsets of groups gives each group's share of the joint attributable losses (average attributable fraction; Eide & Gefeller 1995). Fractions are applied to observed losses. Uncertainty comes from 500 posterior draws of the fixed effects per taxon; the spatial field is held at its posterior mean. City-wide totals sum over taxa.
+- **Results (all taxa summed; 45,112 observed losses):**
+
+  | Group | % of losses (95% interval) | Losses (95% interval) |
+  |---|---|---|
+  | Impervious surface | 6.0 (4.4–7.7) | 2,725 (1,980–3,463) |
+  | Lack of stewardship | 5.1 (3.0–6.9) | 2,303 (1,358–3,131) |
+  | Construction & demolition | 3.1 (2.4–3.8) | 1,410 (1,103–1,706) |
+  | Sandy inundation zone | 1.8 (1.5–2.1) | 814 (667–952) |
+  | **All four jointly** | **16.0 (13.5–18.5)** | **7,238 (6,078–8,362)** |
+
+- By taxon, the joint share ranges from about −1% (*Fraxinus pennsylvanica*) to 39% (*Tilia americana*).
+- Negative values for single taxa mean the driver's estimated effect for that taxon runs in the protective direction (e.g., stewardship for *Tilia tomentosa*).
+- **Outputs:** `output/Fig8_attribution.png` and `output/attribution_summary.csv`.
+
 ## 7. Checking that canopy loss means mortality
 
 - Draw a random sample of loss trees, about 200 stratified by taxon and by construction status.
@@ -225,3 +252,5 @@ In the by-taxon figures, the y-axis order is "All taxa (meta-analysis)" at the t
 | 2026-10-07 | Street construction (both windows) removed from the analysis and figures: unresolvable data problems (per Ging-Yan) |
 | 2026-10-07 | Spatial SD prior P(σ > 1) = 0.05 confirmed; summaries also save the fixed-effect correlation matrix and each tree's linear predictor (for attribution) |
 | 2026-10-10 | Spatial block CV run (2 km blocks, 5 folds, 200 m mesh, eb); held-out AUC 0.57–0.70; risk maps to be framed accordingly |
+| 2026-10-20 | Attribution: Shapley-averaged attributable fractions for 5 modifiable driver groups (10th/90th pct references for continuous drivers); land use and context drivers held at observed values; no 25/75 sensitivity unless requested |
+| 2026-10-20 | Attribution: canopy deficit removed (hard to interpret); four groups remain (construction & demolition, stewardship, impervious, Sandy) |

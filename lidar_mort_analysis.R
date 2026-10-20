@@ -906,6 +906,101 @@ for (i in which(sp_list %in% taxa_to_fit)){
   p_cv_auc
   ggsave(p_cv_auc, filename = "output/SI_cv_auc.png", width = 6.5, height = 6, dpi = 300)
   
+### Fig 8: losses attributable to modifiable drivers (Shapley-averaged attributable fractions) ##########
+  # Associational, not causal: the share of observed 2017-21 canopy losses associated with exposure beyond a reference level,
+  # under each taxon's fitted model. Exposure is only reduced, never increased: trees already at or better than the reference
+  # keep their observed values. Land use, canopy within 100 m, heat, SVI, population and park proximity are held at observed
+  # values (context; neighborhood canopy was left out of the attribution because its interpretation is complicated).
+  # Groups interact multiplicatively (cloglog), so each group's share of the joint attributable losses is its Shapley value:
+  # its average marginal contribution over all orders of removing groups (average attributable fraction; Eide & Gefeller 1995).
+  # Uncertainty: posterior draws of the fixed effects; each tree's spatial field and other terms are held at the posterior mean.
+  
+  attr_ref <- c(imp = quantile(tree_vars_full_nona_format$imp_vis_10_2017_z, 0.10, names = FALSE)) #10th percentile, pooled
+  attr_groups <- list(
+    "Construction & demolition" = c("is_B_cons_bool", "is_DM_bool", "is_B_cons_1317_bool", "is_DM_1317_bool"),
+    "Lack of stewardship"       = "stewardship",
+    "Impervious surface"        = "imp_vis_10_2017_z",
+    "Sandy inundation zone"     = "in_sandy_zone_bool")
+  #counterfactual value of each term (only moves exposure toward the reference)
+  attr_counterfactual <- function(trees) {
+    tibble(is_B_cons_bool = 0, is_DM_bool = 0, is_B_cons_1317_bool = 0, is_DM_1317_bool = 0,
+           stewardship = 1,
+           imp_vis_10_2017_z = pmin(trees$imp_vis_10_2017_z, attr_ref["imp"]),
+           in_sandy_zone_bool = 0, .rows = nrow(trees))
+  }
+  attr_n_draws <- 500
+  k <- length(attr_groups)
+  subsets <- as.matrix(expand.grid(rep(list(0:1), k))); colnames(subsets) <- names(attr_groups) #all 2^k combinations
+  shapley_w <- function(s) factorial(s) * factorial(k - s - 1) / factorial(k)
+  #for each group: the subsets without it, the matching subsets with it added, and the Shapley weights (computed once)
+  subset_key <- apply(subsets, 1, paste, collapse = "")
+  shapley_pairs <- lapply(seq_len(k), function(g) {
+    without <- which(subsets[, g] == 0)
+    with <- match(apply(subsets[without, , drop = FALSE], 1, function(x) paste(replace(x, g, 1), collapse = "")), subset_key)
+    list(without = without, with = with, w = shapley_w(rowSums(subsets[without, , drop = FALSE])))
+  })
+  
+  attr_one_taxon <- function(m, trees) {
+    cf <- attr_counterfactual(trees)
+    terms <- unlist(attr_groups)
+    dx <- as.matrix(cf[, terms]) - as.matrix(trees[, terms]) #change in each term under the counterfactual
+    draws <- m$fixed_draws[terms, seq_len(attr_n_draws), drop = FALSE]
+    res <- lapply(seq_len(attr_n_draws), function(s) {
+      #change in each tree's linear predictor from switching off each group, for this draw
+      d_group <- sapply(attr_groups, function(g) dx[, g, drop = FALSE] %*% draws[g, s])
+      losses_S <- colSums(1 - exp(-exp(trees$eta_mean + d_group %*% t(subsets)))) #expected losses with each subset of groups removed
+      v <- losses_S[1] - losses_S #reduction in expected losses for each subset (row 1 = nothing removed)
+      phi <- sapply(shapley_pairs, function(sp_g) sum(sp_g$w * (v[sp_g$with] - v[sp_g$without]))) #Shapley value of each group
+      c(setNames(phi / losses_S[1], names(attr_groups)), joint = v[nrow(subsets)] / losses_S[1]) #attributable fractions
+    })
+    af <- do.call(rbind, res)
+    as_tibble(af) %>% mutate(draw = row_number(), sp = m$sp, observed_losses = sum(trees$mort))
+  }
+  
+  attr_draws <- parallel::mclapply(seq_along(mort_model_list), function(i) {
+    attr_one_taxon(mort_model_list[[i]], trees_model_list[[i]])
+  }, mc.cores = 7) %>% bind_rows()
+  
+  #citywide: attributable losses summed over taxa (per draw), as a share of all observed losses
+  attr_long <- attr_draws %>% 
+    tidyr::pivot_longer(c(all_of(names(attr_groups)), joint), names_to = "group", values_to = "af") %>% 
+    mutate(losses = af * observed_losses)
+  attr_city <- attr_long %>% group_by(group, draw) %>% 
+    summarise(losses = sum(losses), observed_losses = sum(observed_losses), .groups = "drop") %>% 
+    mutate(af = losses / observed_losses, sp = meta_label)
+  attr_summary <- bind_rows(attr_long, attr_city) %>% 
+    group_by(sp, group) %>% 
+    summarise(observed_losses = first(observed_losses),
+              losses = median(losses), losses_lower = quantile(af * observed_losses, 0.025), losses_upper = quantile(af * observed_losses, 0.975),
+              pct = 100 * median(af), pct_lower = 100 * quantile(af, 0.025), pct_upper = 100 * quantile(af, 0.975), .groups = "drop")
+  attr_summary %>% filter(sp == meta_label)
+  write_csv(attr_summary %>% mutate(sp = ifelse(sp == meta_label, "All taxa (summed)", sp)), "output/attribution_summary.csv")
+  
+  attr_plot_df <- attr_summary %>% 
+    mutate(group = factor(group, levels = c(names(attr_groups), "joint"), labels = c(names(attr_groups), "All four groups (joint)")),
+           sp = factor(sp, levels = sp_levels), 
+           type = factor(ifelse(sp == meta_label, "All taxa", "Taxon"), levels = c("Taxon", "All taxa")))
+  p_attr <- ggplot(attr_plot_df, aes(x = pct, y = sp, colour = type, shape = type)) +
+    geom_vline(xintercept = 0, colour = "grey60", linewidth = 0.3) +
+    geom_linerange(aes(xmin = pct_lower, xmax = pct_upper), linewidth = 0.5) +
+    geom_point(size = 1.6) +
+    scale_colour_manual(values = c("Taxon" = "#2a78d6", "All taxa" = "#eb6834"), name = NULL) +
+    scale_shape_manual(values = c("Taxon" = 16, "All taxa" = 18), name = NULL) +
+    scale_y_discrete(labels = function(x) { lab <- taxon_labels(x); lab[x == meta_label] <- "All taxa (summed)"; lab }) +
+    facet_wrap(~group, ncol = 3, scales = "free_x") +
+    labs(title = "Figure 8. Share of 2017-21 canopy losses associated with modifiable drivers",
+         subtitle = "Shapley-averaged attributable fraction (%) with 95% interval; exposure reduced to: no construction/demolition,\nstewardship present, 10th percentile impervious share, outside the Sandy zone",
+         caption = "Associational, not causal. Land use, canopy within 100 m, heat, SVI, population and park proximity held at observed values.\nIntervals reflect uncertainty in the driver effects.",
+         x = "% of observed canopy losses", y = NULL) +
+    theme_minimal(base_size = 9) +
+    theme(panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(),
+          strip.text = element_text(face = "bold", hjust = 0), panel.spacing.x = unit(1.5, "lines"),
+          axis.text.y = element_text(size = 7), legend.position = "top", legend.justification = "left",
+          plot.caption = element_text(hjust = 0, colour = "#52514e"),
+          plot.background = element_rect(fill = "white", colour = NA))
+  p_attr
+  ggsave(p_attr, filename = "output/Fig8_attribution.png", width = 10, height = 9, dpi = 300)
+  
 ### Fig 7: map of predicted mortality by individual tree #######################################################
  tree_preds <- bind_rows(trees_model_list)
   
