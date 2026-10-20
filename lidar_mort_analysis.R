@@ -203,6 +203,16 @@ tree_vars_full_nona_format <- tree_vars_full %>%
   xy_m <- st_as_sf(tree_vars_full_nona_format, coords = c("x", "y"), crs = 2263) %>% st_transform(crs_m) %>% st_coordinates()
   tree_vars_full_nona_format <- tree_vars_full_nona_format %>% mutate(x = xy_m[, "X"], y = xy_m[, "Y"])
   
+  #spatial cross-validation folds: 2 km x 2 km blocks, randomly assigned (fixed seed) to 5 folds; the same assignment for every taxon
+  cv_block_m <- 2000
+  cv_n_folds <- 5
+  tree_vars_full_nona_format <- tree_vars_full_nona_format %>% 
+    mutate(cv_block = paste(floor(x / cv_block_m), floor(y / cv_block_m)))
+  cv_blocks <- sort(unique(tree_vars_full_nona_format$cv_block))
+  set.seed(20261009)
+  cv_fold_of_block <- setNames(sample(rep_len(1:cv_n_folds, length(cv_blocks))), cv_blocks)
+  tree_vars_full_nona_format$cv_fold <- unname(cv_fold_of_block[tree_vars_full_nona_format$cv_block])
+  
   sample_flow <- sample_flow %>% mutate(n_removed = lag(n) - n)
   sample_flow
   write_csv(sample_flow, "output/SI_sample_flow.csv")
@@ -390,11 +400,19 @@ tree_vars_full_nona_format <- tree_vars_full %>%
 sp_list <- unique(tree_vars_full_nona_format$sp_a) %>% sort()
 sp_df <- data.frame(sp = sp_list, model = as.character(1:length(sp_list))) 
 
+## Run settings (environment variables; defaults = the main analysis) ------------------------------
+  # CV_FOLD: 0 = fit all trees; 1-5 = hold out that spatial fold and save predictions for it (cross-validation)
+  # MESH_EDGE: inner mesh max.edge in m; INLA_THREADS: INLA threads per fit (lower when running fits in parallel)
+  cv_holdout <- as.integer(Sys.getenv("CV_FOLD", "0"))
+  cv_mode <- cv_holdout > 0
+  mesh_edge <- as.numeric(Sys.getenv("MESH_EDGE", "100"))
+  inla_threads <- Sys.getenv("INLA_THREADS", "8:1")
+
 ## Mesh and SPDE (Matern with PC priors), shared by all taxa; all distances in meters ------------------------------
   mesh <- fm_mesh_2d_inla(
     boundary = nyc.bdry, #loaded at start of script
     crs      = fm_crs(crs_m), #same CRS as the tree points and the NYC boundary (needed e.g. to mask the field-map pixel grid)
-    max.edge = c(100, 2000), #100 m inside the city (~range/5 vs the 500 m range prior; fitted ranges ~150-450 m); coarse in the outer extension
+    max.edge = c(mesh_edge, 2000), #100 m inside the city (~range/5 vs the 500 m range prior; fitted ranges ~150-450 m); coarse in the outer extension
     offset   = c(-0.01, 3000), #negative = relative to boundary; outer extension avoids edge effects
     cutoff   = 50
   )
@@ -440,6 +458,8 @@ for (i in which(sp_list %in% taxa_to_fit)){
   sp_focal <- sp_list[i] #sp_focal <- sp_list[6]
   print(paste(i, sp_focal))
   
+  if (cv_mode && file.exists(fit_file(sp_focal, paste0("cv_fold", cv_holdout)))) next #this taxon and fold already done
+  
   if (file.exists(fit_file(sp_focal, "summary"))) { #already fitted: reload the summary and move on
     fit_summary <- readRDS(fit_file(sp_focal, "summary"))
     mort_model_list[[i]] <- fit_summary$model
@@ -458,8 +478,9 @@ for (i in which(sp_list %in% taxa_to_fit)){
            is_LU_hidensres, is_LU_comm, is_LU_indust, is_LU_publicinst, is_LU_outdoorrec, is_LU_vacant, is_LU_noparcel, #LowDensityResidential is the reference
            dbh_cm, summer_max_z, summer_min_z, imp_vis_10_2017_z, TC_100m_2017_z, pop_100m_log_z, RPL_THEME1_z, RPL_THEME3_z, in_sandy_zone_bool,
            near_park_10m, #NYCHA proximity removed: too few flagged trees per taxon
-           x, y) %>% 
+           cv_fold, x, y) %>% 
     mutate(across(where(is.logical), as.numeric))
+  if (cv_mode) trees <- trees %>% mutate(mort_obs = mort, mort = ifelse(cv_fold == cv_holdout, NA, mort)) #held-out trees: response unknown
   trees_sf <- st_as_sf( trees, coords = c("x", "y"), crs = crs_m, remove = FALSE) 
   
   #1D mesh for the DBH smooth (cm), spanning this taxon's range
@@ -516,9 +537,10 @@ for (i in which(sp_list %in% taxa_to_fit)){
     cmp,
     lik,
     options = bru_options(
-      control.compute = list(dic = TRUE, waic = TRUE, cpo = TRUE, config = TRUE), #config needed to draw joint posterior samples below
-      #(control.fixed = list(correlation.matrix = TRUE) would be simpler, but it makes bru() fail)
-      verbose = FALSE, num.threads = "8:1" #8 threads: same estimates as 16, ~30% less memory, slightly faster
+      control.compute = list(dic = !cv_mode, waic = !cv_mode, cpo = !cv_mode,
+                             config = TRUE), #always on: bru() fails without it, and it is needed for the posterior draws below
+      control.inla = list(int.strategy = if (cv_mode) "eb" else "auto"), #CV fits: single-point integration (same estimates, ~1/3 the memory)
+      verbose = FALSE, num.threads = inla_threads #default 8 threads: same estimates as 16, ~30% less memory, slightly faster
     )
   )
   
@@ -526,11 +548,27 @@ for (i in which(sp_list %in% taxa_to_fit)){
   
   ### saving data from focal species
   fit$sp <- sp_focal
+  
+  if (cv_mode) { #cross-validation: save predictions for the held-out trees, then move on to the next taxon
+    held <- which(is.na(trees$mort))
+    eta <- fit$summary.linear.predictor[held, c("mean", "sd")]
+    z <- qnorm(ppoints(50)) #average the 4-year loss probability over the posterior of the linear predictor
+    p_held <- rowMeans(1 - exp(-exp(eta$mean + outer(eta$sd, z))))
+    cv_pred <- tibble(sp = sp_focal, fold = cv_holdout, tree_id = trees$tree_id[held], mort = trees$mort_obs[held],
+                      eta_mean = eta$mean, eta_sd = eta$sd, p = p_held,
+                      p_null = mean(trees$mort, na.rm = TRUE)) #baseline: this taxon's loss rate in the training folds
+    saveRDS(list(pred = cv_pred, summary.fixed = fit$summary.fixed, summary.hyperpar = fit$summary.hyperpar,
+                 n_train = sum(!is.na(trees$mort)), n_held = length(held)),
+            fit_file(sp_focal, paste0("cv_fold", cv_holdout)))
+    rm(fit, lik, trees_sf); gc()
+    next
+  }
+  
   if (save_full_fit) saveRDS(fit, fit_file(sp_focal, "fit")) #full fit, needed for predict()
   
   #for attribution analyses: joint posterior draws of the fixed effects (rows = terms, columns = draws)
   fixed_names <- rownames(fit$summary.fixed)
-  fixed_draws <- inla.posterior.sample(n = 1000, result = fit, num.threads = "8:1",
+  fixed_draws <- inla.posterior.sample(n = 1000, result = fit, num.threads = inla_threads,
                                        selection = setNames(as.list(rep(1, length(fixed_names))), fixed_names))
   fixed_draws <- sapply(fixed_draws, function(d) d$latent[, 1])
   rownames(fixed_draws) <- fixed_names
@@ -791,6 +829,82 @@ for (i in which(sp_list %in% taxa_to_fit)){
 
   p_field
   ggsave(p_field, filename = "output/SI_spatial_field_by_taxon.png", width = 11, height = 9, dpi = 300)
+  
+### SI: spatial block cross-validation (2 km blocks, 5 folds; see ANALYSIS_PLAN.md section 6) ###############
+  # fits are run separately with CV_FOLD = 1-5 (output/run_cv.sh); each saved the predictions for its held-out trees
+  cv_dir <- "output/cv"
+  cv_pred <- map_dfr(list.files(cv_dir, pattern = "_cv_fold[0-9]+\\.rds$", full.names = TRUE), ~ readRDS(.x)$pred)
+  
+  log_score <- function(y, p) y * log(p) + (1 - y) * log(1 - p)
+  #calibration-in-the-large (intercept with the predictions as an offset; 0 = no overall bias) and calibration slope (1 = ideal),
+  #both on the logit scale
+  cal_intercept <- function(y, p) unname(coef(glm(y ~ offset(qlogis(p)), family = binomial))[1])
+  cal_slope     <- function(y, p) unname(coef(glm(y ~ qlogis(p), family = binomial))[2])
+  cv_summarise <- function(d) d %>% summarise(
+    n = n(), folds = n_distinct(fold), observed = mean(mort), predicted = mean(p),
+    log_score = mean(log_score(mort, p)), log_score_null = mean(log_score(mort, p_null)),
+    brier = mean((mort - p)^2), brier_null = mean((mort - p_null)^2),
+    auc_cv = as.numeric(pROC::auc(mort, p, quiet = TRUE)),
+    cal_intercept = cal_intercept(mort, p), cal_slope = cal_slope(mort, p), .groups = "drop") %>% 
+    mutate(log_score_skill = 1 - log_score / log_score_null, brier_skill = 1 - brier / brier_null)
+  
+  auc_insample <- tibble(sp = map_chr(roc_list, "sp"), auc_insample = map_dbl(roc_list, ~ as.numeric(pROC::auc(.x))))
+  cv_metrics <- bind_rows(cv_pred %>% group_by(sp) %>% cv_summarise(),
+                          cv_pred %>% cv_summarise() %>% mutate(sp = meta_label)) %>% 
+    left_join(auc_insample, by = "sp") %>% 
+    mutate(sp = factor(sp, levels = sp_levels)) %>% arrange(desc(sp))
+  cv_metrics
+  cv_pooled_label <- "All taxa (pooled)" #the CV summary pools held-out trees; it is not a meta-analysis
+  write_csv(cv_metrics %>% mutate(sp = ifelse(sp == meta_label, cv_pooled_label, as.character(sp))), "output/SI_cv_metrics.csv")
+  
+  # calibration: observed vs predicted 4-year loss in deciles of predicted risk, by taxon and pooled
+  cv_bins <- bind_rows(cv_pred, cv_pred %>% mutate(sp = meta_label)) %>% 
+    group_by(sp) %>% mutate(bin = ntile(p, 10)) %>% 
+    group_by(sp, bin) %>% 
+    summarise(predicted = mean(p), observed = mean(mort), n = n(), .groups = "drop") %>% 
+    mutate(se = sqrt(observed * (1 - observed) / n),
+           sp = factor(sp, levels = rev(sp_levels))) #meta label first, then taxa alphabetically, "other" last
+  
+  p_cv_calibration <- ggplot(cv_bins, aes(x = predicted, y = observed)) +
+    geom_abline(slope = 1, intercept = 0, colour = "grey60", linewidth = 0.3) +
+    geom_linerange(aes(ymin = pmax(observed - 1.96 * se, 0), ymax = observed + 1.96 * se), colour = "#2a78d6", linewidth = 0.4) +
+    geom_point(colour = "#2a78d6", size = 1.2) +
+    facet_wrap(~sp, ncol = 6, labeller = as_labeller(function(x) ifelse(x == meta_label, cv_pooled_label, x))) +
+    coord_equal(xlim = c(0, 0.4), ylim = c(0, 0.4)) +
+    scale_x_continuous(labels = label_percent(accuracy = 1), breaks = c(0, 0.2, 0.4)) +
+    scale_y_continuous(labels = label_percent(accuracy = 1), breaks = c(0, 0.2, 0.4)) +
+    labs(title = "Calibration of held-out predictions (spatial block cross-validation)",
+         subtitle = "Observed vs predicted 4-year canopy loss in deciles of predicted risk; 2 km blocks, 5 folds; line = perfect calibration",
+         x = "Predicted 4-year loss", y = "Observed 4-year loss") +
+    theme_minimal(base_size = 8) +
+    theme(strip.text = element_text(face = "italic"), panel.grid.minor = element_blank(),
+          plot.background = element_rect(fill = "white", colour = NA))
+  p_cv_calibration
+  ggsave(p_cv_calibration, filename = "output/SI_cv_calibration.png", width = 10, height = 8.5, dpi = 300)
+  
+  # discrimination: in-sample vs cross-validated AUC by taxon
+  p_cv_auc <- cv_metrics %>% 
+    select(sp, `In-sample` = auc_insample, `Cross-validated` = auc_cv) %>% 
+    tidyr::pivot_longer(-sp, names_to = "type", values_to = "auc") %>% 
+    filter(!is.na(auc)) %>% 
+    mutate(type = factor(type, levels = c("In-sample", "Cross-validated"))) %>% 
+    ggplot(aes(x = auc, y = sp)) +
+    geom_vline(xintercept = 0.5, colour = "grey60", linewidth = 0.3) +
+    geom_line(aes(group = sp), colour = "#d4d3cd", linewidth = 0.6) +
+    geom_point(aes(colour = type, shape = type), size = 2) +
+    scale_colour_manual(values = c("In-sample" = "#a3a29c", "Cross-validated" = "#2a78d6"), name = NULL) +
+    scale_shape_manual(values = c("In-sample" = 16, "Cross-validated" = 16), name = NULL) +
+    scale_y_discrete(labels = function(x) { lab <- taxon_labels(x); lab[x == meta_label] <- cv_pooled_label; lab }) +
+    scale_x_continuous(limits = c(0.5, 1)) +
+    labs(title = "Discrimination: in-sample vs spatially cross-validated AUC",
+         subtitle = "Held-out trees are in 2 km blocks not used for fitting; the spatial field cannot help there",
+         x = "AUC", y = NULL) +
+    theme_minimal(base_size = 9) +
+    theme(panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(),
+          legend.position = "top", legend.justification = "left",
+          plot.background = element_rect(fill = "white", colour = NA))
+  p_cv_auc
+  ggsave(p_cv_auc, filename = "output/SI_cv_auc.png", width = 6.5, height = 6, dpi = 300)
   
 ### Fig 7: map of predicted mortality by individual tree #######################################################
  tree_preds <- bind_rows(trees_model_list)

@@ -134,7 +134,16 @@ These are made **once for all taxa**. The defaults in the table are fixed a prio
 
 ## 6. Validation
 
-- **Spatial block cross-validation:** about 2 km blocks and 5–10 folds. Report pooled log score, AUC and calibration for each taxon. This is the out-of-sample evidence behind the risk maps.
+- **Spatial block cross-validation (done 2026-10-10):**
+  - **Design:** 2 km × 2 km blocks (249), randomly assigned to 5 folds (seed 20261009), the same for every taxon. Each fit holds out one fold (responses set to `NA`) and predicts it, giving 105 fits.
+  - **CV fits use lighter settings:** a 200 m mesh, `eb` integration and no attribution draws. With ranges of 100–500 m, the spatial field contributes almost nothing inside a 2 km held-out block, and fixed effects at 200 m and 100 m agreed within 0.02 on the log scale.
+  - **Code:** `CV_FOLD`, `MESH_EDGE` and `INLA_THREADS` settings in `lidar_mort_analysis.R`, with `output/run_cv.sh` running 4 fits in parallel (about 16 h). Predictions are in `output/cv/`.
+  - **Outputs:** `output/SI_cv_metrics.csv`, `output/SI_cv_calibration.png` and `output/SI_cv_auc.png`. The predicted probability averages the 4-year loss probability over each tree's posterior linear predictor. The baseline is the taxon's loss rate in the training folds.
+  - **Results:**
+    - Held-out AUC is **0.57–0.70** by taxon, against 0.84–0.97 in-sample. Out-of-sample discrimination comes from the drivers alone and is modest.
+    - Log-score skill over the baseline is 0–5% (*Liquidambar* −0.5%).
+    - Calibration is generally good. Overall loss is over-predicted slightly (9.9% vs 9.1%) and clearly for *Gleditsia*, *Liquidambar*, *Pyrus* and *Zelkova* (calibration intercepts −0.26 to −0.44). Calibration slopes are 0.65–1.04, so predictions are somewhat too extreme for several taxa.
+  - **Implication:** the driver effects (Q1) are unaffected. The risk maps (Q2) should be framed as reflecting observed local patterns (the spatial field) plus drivers. Predictions for unsampled places are only modestly better than the citywide rate, and some taxa need recalibration.
 - **Diagnostics in the fitted models:** LOO-PIT from CPO, binned-residual plots and calibration plots.
 - In-sample AUC is reported only alongside cross-validated AUC, never on its own.
 - Hosmer–Lemeshow is dropped; with n ≈ 40k per taxon it rejects almost any model.
@@ -215,3 +224,4 @@ In the by-taxon figures, the y-axis order is "All taxa (meta-analysis)" at the t
 | 2026-10-07 | Social context: SVI theme 1 (socioeconomic) and theme 3 (racial/ethnic minority status); no ACS variables in the main model |
 | 2026-10-07 | Street construction (both windows) removed from the analysis and figures: unresolvable data problems (per Ging-Yan) |
 | 2026-10-07 | Spatial SD prior P(σ > 1) = 0.05 confirmed; summaries also save the fixed-effect correlation matrix and each tree's linear predictor (for attribution) |
+| 2026-10-10 | Spatial block CV run (2 km blocks, 5 folds, 200 m mesh, eb); held-out AUC 0.57–0.70; risk maps to be framed accordingly |
