@@ -175,11 +175,19 @@ These are made **once for all taxa**. The defaults in the table are fixed a prio
 - Negative values for single taxa mean the driver's estimated effect for that taxon runs in the protective direction (e.g., stewardship for *Tilia tomentosa*).
 - **Outputs:** `output/Fig8_attribution.png` and `output/attribution_summary.csv`.
 
-## 7. Checking that canopy loss means mortality
+## 7. Checking that recorded canopy loss means the tree is gone
 
-- Draw a random sample of loss trees, about 200 stratified by taxon and by construction status.
-- Check each against Parks Forestry work orders and removal records, and against Street View imagery from before and after.
-- Report the share confirmed dead or removed, and how much of the construction signal is removal.
+- **Cause of loss is not analyzed.** The paper describes the response as mixing removal and death from natural and human causes, which the data cannot separate (decided 2026-10-20). This check validates only whether a recorded loss corresponds to a tree that is actually gone or dead.
+- **Sample:**
+  - 200 trees recorded as lost, stratified proportionally by model taxon (all 21 represented), in random order
+  - 50 randomly ordered backups, used in order only to replace trees that can't be verified
+  - seed 20261020, drawn from the 45,112 losses in the analysis sample
+- **Method:** manual review of Google Street View imagery before (2015–17) and after (2021 or later) by a student, coordinated by Ging-Yan. Each tree gets an outcome code, for example `GONE`, `GONE_REPLANTED`, `DEAD_STANDING`, `ALIVE_MAJOR_CROWN_LOSS`, `ALIVE_NO_CLEAR_CHANGE`, `NOT_VERIFIABLE`.
+- **Reported:**
+  - % of recorded losses confirmed gone, replaced or dead, with an exact 95% CI
+  - % with real canopy loss, which also counts major crown loss on a living tree
+  - breakdowns by construction exposure and borough
+- **Materials:** `streetview_verification/`: README with instructions, `verification_sheet.xlsx` with drop-downs and Street View links, and the sampling and analysis scripts.
 
 ## 8. Outputs
 
@@ -254,3 +262,4 @@ In the by-taxon figures, the y-axis order is "All taxa (meta-analysis)" at the t
 | 2026-10-10 | Spatial block CV run (2 km blocks, 5 folds, 200 m mesh, eb); held-out AUC 0.57–0.70; risk maps to be framed accordingly |
 | 2026-10-20 | Attribution: Shapley-averaged attributable fractions for 5 modifiable driver groups (10th/90th pct references for continuous drivers); land use and context drivers held at observed values; no 25/75 sensitivity unless requested |
 | 2026-10-20 | Attribution: canopy deficit removed (hard to interpret); four groups remain (construction & demolition, stewardship, impervious, Sandy) |
+| 2026-10-20 | No cause-of-loss analysis (response mixes natural and human removal); Street View verification of 200 recorded losses prepared (`streetview_verification/`) for a student |
