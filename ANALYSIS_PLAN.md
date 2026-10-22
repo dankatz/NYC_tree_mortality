@@ -195,7 +195,7 @@ These are made **once for all taxa**. The defaults in the table are fixed a prio
 |---|---|---|
 | Fig 1 | (manuscript figure, e.g. study area; not produced by the script) | |
 | Table 1 | Taxa, n, median DBH, observed 4-year and annual mortality | |
-| Fig 2 | Mortality versus DBH, by taxon | |
+| Fig 2 | Mortality versus DBH, by taxon. Draft model-based version: hazard ratio vs DBH relative to the taxon's median DBH, from each taxon's RW2 smooth. Credible bands need joint draws of the smooth, which the loop saves from 2026-10-22 on (next refit) | `output/Fig2_size_effect_model.png` |
 | Fig 3 | Map of observed mortality, by taxon | |
 | Fig 4 | Mean effect of every driver across taxa (meta-analysis overview) | `output/Fig4_cross_taxa_means.png` |
 | Fig 5 | By taxon: building construction and demolition, 2013–17 and 2017–21 (2 × 2, shared axis) | `output/Fig5_forest_construction.png` |
@@ -263,3 +263,4 @@ In the by-taxon figures, the y-axis order is "All taxa (meta-analysis)" at the t
 | 2026-10-20 | Attribution: Shapley-averaged attributable fractions for 5 modifiable driver groups (10th/90th pct references for continuous drivers); land use and context drivers held at observed values; no 25/75 sensitivity unless requested |
 | 2026-10-20 | Attribution: canopy deficit removed (hard to interpret); four groups remain (construction & demolition, stewardship, impervious, Sandy) |
 | 2026-10-20 | No cause-of-loss analysis (response mixes natural and human removal); Street View verification of 200 recorded losses prepared (`streetview_verification/`) for a student |
+| 2026-10-22 | Model loop also saves 1,000 joint posterior draws of the DBH smooth (plus knot positions) for exact credible bands on the size-effect figure; takes effect at the next refit |

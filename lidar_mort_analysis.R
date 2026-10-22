@@ -2,21 +2,6 @@
 # script by Dan Katz but borrows some elements from previous work by Dave Miller
 
 
-#next steps from here:
-# get new data from ging-yan:
-# add population density
-# add the land use at various scales including tree cover
-# updated construction variables
-#
-# do model selection across taxa to decide which variants of spatial data to include
-# e.g., impervious at 5 10 or 15 m
-# do model selection to decide whether the pluto data should be included 
-# create an SI with model selection results
-
-# revise forest plot with coefficients
-# create an SI with model diagnostics (ROC values, maybe binned residuals)
-
-
 
 #### set up work environment and load data #####################################
 #library(tidyverse)
@@ -69,9 +54,8 @@ nyc_boundary <- st_read(file.path(data_dir, "nyc_boundary_polygon/nybb.shp")) %>
 #(a 100 m buffer / 50 m simplification left sliver triangles that made INLA fail at max.edge 100-200 m)
 nyc.bdry <- nyc_boundary %>% st_buffer(500) %>% st_simplify(dTolerance = 150) %>% fm_as_segm()
 
-#load in basemap for plotting
-nyc_topo_rast <- basemap_raster(nyc_boundary, map_service = "carto", map_type = "light_no_labels") #basemap_raster(nyc_boundary, map_service = "esri", map_type = "world_hillshade")
-nyc_topo_spatrast <- rast(nyc_topo_rast) #convert to spatrast for plotting 
+#basemaps: CARTO tiles now require an API key (unkeyed requests return "API KEY REQUIRED" placeholder tiles), so Fig 3 uses
+#borough outlines and Fig 7 downloads a keyless Esri basemap for its own map window
 
 ### parse landuse ###################################################
 
@@ -107,10 +91,10 @@ nyc_topo_spatrast <- rast(nyc_topo_rast) #convert to spatrast for plotting
   pluto_dist_max_ft <- 10 / 0.3048006 # pluto_dist is in US survey feet
   x[tree_vars_full$pluto_dist > pluto_dist_max_ft] <- "NotNearParcel"
   tree_vars_full$LandUse_char_collapsed <- as.factor(x)
-  tree_vars_full$LandUse_char_collapsed <- relevel(as.factor(tree_vars_full$LandUse_char_collapsed), "LowDensityResidential") # this is Mike's recommendation for base case, may need to collapse land use classes
-
-
+  tree_vars_full$LandUse_char_collapsed <- relevel(as.factor(tree_vars_full$LandUse_char_collapsed), "LowDensityResidential") 
+      # this is Mike's recommendation for base case, may need to collapse land use classes
   summary(tree_vars_full$LandUse_char_collapsed)
+  
 ### create dataframe for analysis ##############################################
 
 #record the number of trees remaining after each filter for the SI sample-flow table
@@ -246,14 +230,6 @@ tree_vars_full_nona_format <- tree_vars_full %>%
   
 ### create species level variables ###############################################
   
-  # #create bins for tree DBH
-  # tree_vars_full_nona_format <-
-  #   tree_vars_full_nona_format %>% 
-  #   group_by(sp_a) %>% 
-  #   mutate(dbh_quintile = as.factor(ntile(dbh_cm, 5)), #calculate survival per quintile or quartile per species
-  #          dbh_decile = as.factor(ntile(dbh_cm, 10))) %>%  
-  #   ungroup() 
-  #str(tree_vars_full_nona_format$dbh_quintile)
   
   #save scale parameters for numeric variables, pooled across all taxa so that 1 SD is the same raw change for every species
   scale_vars <- c("summer_max", "summer_min", "imp_vis_10_2017", "TC_100m_2017", "pop_100m_log", "RPL_THEME1", "RPL_THEME3")
@@ -270,22 +246,22 @@ tree_vars_full_nona_format <- tree_vars_full %>%
                   ~ (.x - mean(.x, na.rm=TRUE)) / sd(.x, na.rm=TRUE),
                   .names = "{.col}_z"))
   
-### some last pre-analysis data exploration ########################################
-  tree_vars_full_nona_format %>% sample_n(10000) %>%
-    ggplot(aes(x = x, y = y, z = is_LU_vacant)) + stat_summary_hex(fun = "mean", binwidth = 1000) + theme_bw() + scale_fill_viridis_c()
-
-  # #map of tree samples across NYC
-  # tree_vars_full_nona_format %>% 
-  #   filter(sp_a == "Quercus palustris") %>% #sample_n(100000) %>%
-  #   ggplot(aes(x = x, y = y)) + geom_hex(binwidth = 5000) + theme_bw() + scale_fill_viridis_c()
-
-
-  tree_vars_full_nona_format %>% sample_n(10000) %>%
-    ggplot(aes(x = TC_5m_2017, y = TC_15m_2017)) + geom_point()
-
-  cor(tree_vars_full_nona_format$TC_5m_2017, tree_vars_full_nona_format$TC_15m_2017)
-  numeric_df <- tree_vars_full_nona_format %>% select(where(~ is.numeric(.x) | is.logical(.x)), -tree_id)
-  cor_matrix <- cor(numeric_df, use = "complete.obs")
+# ### some last pre-analysis data exploration ########################################
+#   tree_vars_full_nona_format %>% sample_n(10000) %>%
+#     ggplot(aes(x = x, y = y, z = is_LU_vacant)) + stat_summary_hex(fun = "mean", binwidth = 1000) + theme_bw() + scale_fill_viridis_c()
+# 
+#   # #map of tree samples across NYC
+#   # tree_vars_full_nona_format %>% 
+#   #   filter(sp_a == "Quercus palustris") %>% #sample_n(100000) %>%
+#   #   ggplot(aes(x = x, y = y)) + geom_hex(binwidth = 5000) + theme_bw() + scale_fill_viridis_c()
+# 
+# 
+#   tree_vars_full_nona_format %>% sample_n(10000) %>%
+#     ggplot(aes(x = TC_5m_2017, y = TC_15m_2017)) + geom_point()
+# 
+#   cor(tree_vars_full_nona_format$TC_5m_2017, tree_vars_full_nona_format$TC_15m_2017)
+#   numeric_df <- tree_vars_full_nona_format %>% select(where(~ is.numeric(.x) | is.logical(.x)), -tree_id)
+#   cor_matrix <- cor(numeric_df, use = "complete.obs")
   
   
 ### table 1: summary of mortality by focal species  ####################################
@@ -357,42 +333,34 @@ tree_vars_full_nona_format <- tree_vars_full %>%
 
   
 ### Fig 3: maps of observed mortality for each taxon #########################################
-  #load in basemap
-  nyc_topo_rast <- basemap_raster(nyc_boundary, map_service = "carto", map_type = "light_no_labels") #basemap_raster(nyc_boundary, map_service = "esri", map_type = "world_hillshade")
-  nyc_topo_spatrast <- rast(nyc_topo_rast) #convert to spatrast for plotting 
-  
   #function to remove bins with lower than a certain n
   bin_removal <- function(x) {
     if(length(x) < 10) return(NA) 
     return((1 - (1 - mean(x)) ^ (1/4)) * 100) #annual mortality
   }
   
-  #project the data to the crs of the basemap tile (3857)
-  tree_vars_full_nona_format_sf_3857 <- st_as_sf(tree_vars_full_nona_format, crs = crs_m, coords = c("x", "y")) %>% 
-    st_transform(., crs = 3857) %>% 
-    bind_cols(st_coordinates(.) %>% as.data.frame())
-  
-  #create figure
+  #create figure (tree coordinates x, y are already in the analysis CRS, EPSG:32118, like nyc_boundary)
   fig3_mort_map <- 
     ggplot() + ggthemes::theme_few() +   
-    geom_spatraster_rgb(data = nyc_topo_spatrast) +
-    stat_summary_hex(data = tree_vars_full_nona_format_sf_3857, aes(x = X, y = Y, z =  mort), fun = bin_removal, bins = 20) +
+    stat_summary_hex(data = tree_vars_full_nona_format, aes(x = x, y = y, z = mort), fun = bin_removal, bins = 20) +
+    geom_sf(data = nyc_boundary, fill = NA, colour = "grey35", linewidth = 0.15) + #borough outlines
+    coord_sf(crs = crs_m, datum = NA) +
     facet_wrap(~sp_a, ncol = 6) +
-    scale_fill_viridis_c(option = "turbo", name = "annual \nmortality (%)  ", 
+    scale_fill_viridis_c(option = "turbo", name = "annual mortality (%)", 
                          limits = c(0, 6),
-                         guide = guide_colorbar(barwidth = 10),
+                         guide = guide_colorbar(barwidth = 16, title.position = "top", title.hjust = 0.5),
                          oob    = squish) + 
     xlab("") + ylab("") + 
-    theme(strip.text = element_text(face = "italic"),
-          legend.position = "bottom",
-          #legend.background = element_rect(fill = "white", color = "grey80"),
+    theme(strip.text = element_text(face = "italic", size = 9),
+          #legend in the empty space to the right of the last row of panels (21 taxa in 6 columns leave 3 empty slots)
+          legend.position = "inside", legend.position.inside = c(0.76, 0.12), legend.direction = "horizontal",
+          legend.background = element_blank(),
           panel.grid.major = element_blank(),  
           panel.grid.minor = element_blank(),
           axis.text = element_blank(),
           axis.ticks = element_blank())
-  
-  # ggsave(fig3_mort_map, filename = paste0(your_path_for_box, "tree_mortality/NYC_st_tree_results/Fig3_mortalitymap.png"),
-  #        width = 10, height = 6.5, units = "in", dpi = 400)
+  fig3_mort_map
+  ggsave(fig3_mort_map, filename = "output/Fig3_observed_mortality_map.png", width = 10, height = 7.2, dpi = 300)
   
 
   
@@ -566,12 +534,20 @@ for (i in which(sp_list %in% taxa_to_fit)){
   
   if (save_full_fit) saveRDS(fit, fit_file(sp_focal, "fit")) #full fit, needed for predict()
   
-  #for attribution analyses: joint posterior draws of the fixed effects (rows = terms, columns = draws)
+  #joint posterior draws (rows = latent elements, columns = draws) of the fixed effects (attribution analyses) and of the
+  #DBH smooth at its knots (credible bands for the size-effect figure). Rows come back named "<term>:<index>", with the DBH
+  #smooth first, so they are selected by name
   fixed_names <- rownames(fit$summary.fixed)
-  fixed_draws <- inla.posterior.sample(n = 1000, result = fit, num.threads = inla_threads,
-                                       selection = setNames(as.list(rep(1, length(fixed_names))), fixed_names))
-  fixed_draws <- sapply(fixed_draws, function(d) d$latent[, 1])
+  n_dbh_knots <- nrow(fit$summary.random$dbh_smooth)
+  post <- inla.posterior.sample(n = 1000, result = fit, num.threads = inla_threads,
+                                selection = c(setNames(as.list(rep(1, length(fixed_names))), fixed_names),
+                                              list(dbh_smooth = seq_len(n_dbh_knots))))
+  post_names <- rownames(post[[1]]$latent)
+  post <- sapply(post, function(d) d$latent[, 1])
+  fixed_draws <- post[match(paste0(fixed_names, ":1"), post_names), , drop = FALSE]
   rownames(fixed_draws) <- fixed_names
+  dbh_draws <- post[match(paste0("dbh_smooth:", seq_len(n_dbh_knots)), post_names), , drop = FALSE]
+  rm(post)
 
   field_nodes <- fit$summary.random$spatial_field #posterior summary at each mesh vertex
   field_list[[i]] <- tibble(sp = sp_focal, x = field_xy[, "X"], y = field_xy[, "Y"],
@@ -587,7 +563,10 @@ for (i in which(sp_list %in% taxa_to_fit)){
                                #for attribution: joint posterior draws and correlation of the fixed effects; each tree's linear
                                #predictor (log 4-year hazard, including the exposure offset) is saved with the tree data below
                                fixed_draws = fixed_draws,
-                               fixed_correlation = cor(t(fixed_draws)))
+                               fixed_correlation = cor(t(fixed_draws)),
+                               #for the size-effect figure: joint draws of the DBH smooth (rows = knots) and the knot positions (cm)
+                               dbh_draws = dbh_draws,
+                               dbh_knots = as.numeric(dbh_mesh$loc))
   
   trees$fitted_p <- fit$summary.fitted.values$mean[1:nrow(trees)] #predicted probability of canopy loss over the 4-year interval
   trees$eta_mean <- fit$summary.linear.predictor$mean[1:nrow(trees)] #linear predictor (cloglog scale), for attribution analyses
@@ -650,6 +629,54 @@ for (i in which(sp_list %in% taxa_to_fit)){
   # 
   # p_binned
    
+### Fig 2 (model-based draft): effect of tree size on mortality hazard, by taxon ########################
+  # posterior of each taxon's RW2 smooth of DBH (log hazard) at the 20 knots of its 1D mesh (knots evenly spaced between the
+  # taxon's smallest and largest DBH, as in the model loop), shown over the 1st-99th percentile of DBH as a hazard ratio
+  # relative to a tree of the taxon's median DBH, holding all other drivers constant. The smooth's own centering (sum to zero
+  # over the knots) is pulled by sparse large-DBH knots, so curves are re-centered at the median. With joint posterior draws
+  # of the smooth (dbh_draws, saved from the 2026-10-22 version of the model loop on), each draw is re-centered and the 95%
+  # band is exact; fits without draws get the posterior-mean curve only.
+  size_df <- map2_dfr(mort_model_list, trees_model_list, function(m, tr) {
+    sm <- m$summary.random$dbh_smooth
+    knots <- seq(min(tr$dbh_cm), max(tr$dbh_cm), length.out = nrow(sm))
+    lims <- quantile(tr$dbh_cm, c(0.01, 0.99), names = FALSE)
+    grid <- sort(unique(c(lims, knots[knots > lims[1] & knots < lims[2]])))
+    med <- median(tr$dbh_cm)
+    if (!is.null(m$dbh_draws)) { #joint draws: re-center each draw at the median, then summarize
+      rel <- apply(m$dbh_draws, 2, function(f) approx(m$dbh_knots, f, grid)$y - approx(m$dbh_knots, f, med)$y)
+      tibble(sp = m$sp, dbh_cm = grid, hr = exp(rowMeans(rel)),
+             hr_lower = exp(apply(rel, 1, quantile, 0.025)), hr_upper = exp(apply(rel, 1, quantile, 0.975)))
+    } else { #summaries only: posterior-mean curve, no band
+      tibble(sp = m$sp, dbh_cm = grid, hr = exp(approx(knots, sm$mean, grid)$y - approx(knots, sm$mean, med)$y),
+             hr_lower = NA_real_, hr_upper = NA_real_)
+    }
+  })
+  size_rug <- map_dfr(trees_model_list, ~ tibble(sp = .x$sp[1], dbh_cm = quantile(.x$dbh_cm, seq(0.1, 0.9, 0.1), names = FALSE)))
+  size_levels <- c(sort(setdiff(unique(size_df$sp), "other")), "other")
+  size_df <- size_df %>% mutate(sp = factor(sp, levels = size_levels))
+  size_rug <- size_rug %>% mutate(sp = factor(sp, levels = size_levels))
+  
+  fig2_size_model <- ggplot(size_df, aes(x = dbh_cm)) +
+    geom_hline(yintercept = 1, colour = "grey60", linewidth = 0.3) +
+    #95% band only where joint draws exist (marginal intervals mostly reflect the curve's overall level, not its shape)
+    geom_ribbon(data = ~ filter(.x, !is.na(hr_lower)), aes(ymin = hr_lower, ymax = hr_upper), fill = "#2a78d6", alpha = 0.2) +
+    geom_line(aes(y = hr), colour = "#2a78d6", linewidth = 0.6) +
+    geom_rug(data = size_rug, sides = "b", colour = "grey40", length = unit(0.04, "npc")) +
+    scale_y_log10(breaks = c(0.25, 0.5, 1, 2, 4, 8), labels = function(x) format(x, drop0trailing = TRUE)) +
+    coord_cartesian(ylim = c(0.3, 8)) +
+    facet_wrap(~sp, ncol = 6, scales = "free_x") +
+    labs(title = "Figure 2. Effect of tree size on mortality hazard, by taxon",
+         subtitle = "Hazard ratio relative to a tree of the taxon's median DBH (log scale), with 95% credible band; adjusted for all other drivers",
+         caption = paste0(if (any(is.na(size_df$hr_lower))) "DRAFT: some fits lack joint draws of the DBH smooth, so their curves have no band. " else "",
+                          "Curves span the 1st-99th percentile of DBH for each taxon; tick marks show DBH deciles."),
+         x = "DBH (cm)", y = "Hazard ratio") +
+    theme_minimal(base_size = 9) +
+    theme(strip.text = element_text(face = "italic"), panel.grid.minor = element_blank(),
+          panel.spacing.x = unit(1, "lines"), plot.caption = element_text(hjust = 0, colour = "#52514e"),
+          plot.background = element_rect(fill = "white", colour = NA))
+  fig2_size_model
+  ggsave(fig2_size_model, filename = "output/Fig2_size_effect_model.png", width = 10, height = 7.5, dpi = 300)
+  
 ### Figs 4-6 and S1: forest plots of fixed effects (Fig 4 cross-taxa overview; Figs 5, 6, S1 by taxon) ########
   # term labels and display order, grouped by construct; continuous terms are per 1 SD (pooled across taxa)
   term_labels <- c(
@@ -977,7 +1004,8 @@ for (i in which(sp_list %in% taxa_to_fit)){
   write_csv(attr_summary %>% mutate(sp = ifelse(sp == meta_label, "All taxa (summed)", sp)), "output/attribution_summary.csv")
   
   attr_plot_df <- attr_summary %>% 
-    mutate(group = factor(group, levels = c(names(attr_groups), "joint"), labels = c(names(attr_groups), "All four groups (joint)")),
+    filter(group != "joint") %>% #joint totals are reported in the text and in attribution_summary.csv, not plotted
+    mutate(group = factor(group, levels = names(attr_groups)),
            sp = factor(sp, levels = sp_levels), 
            type = factor(ifelse(sp == meta_label, "All taxa", "Taxon"), levels = c("Taxon", "All taxa")))
   p_attr <- ggplot(attr_plot_df, aes(x = pct, y = sp, colour = type, shape = type)) +
@@ -987,7 +1015,7 @@ for (i in which(sp_list %in% taxa_to_fit)){
     scale_colour_manual(values = c("Taxon" = "#2a78d6", "All taxa" = "#eb6834"), name = NULL) +
     scale_shape_manual(values = c("Taxon" = 16, "All taxa" = 18), name = NULL) +
     scale_y_discrete(labels = function(x) { lab <- taxon_labels(x); lab[x == meta_label] <- "All taxa (summed)"; lab }) +
-    facet_wrap(~group, ncol = 3, scales = "free_x") +
+    facet_wrap(~group, ncol = 2, scales = "free_x") +
     labs(title = "Figure 8. Share of 2017-21 canopy losses associated with modifiable drivers",
          subtitle = "Shapley-averaged attributable fraction (%) with 95% interval; exposure reduced to: no construction/demolition,\nstewardship present, 10th percentile impervious share, outside the Sandy zone",
          caption = "Associational, not causal. Land use, canopy within 100 m, heat, SVI, population and park proximity held at observed values.\nIntervals reflect uncertainty in the driver effects.",
@@ -999,7 +1027,7 @@ for (i in which(sp_list %in% taxa_to_fit)){
           plot.caption = element_text(hjust = 0, colour = "#52514e"),
           plot.background = element_rect(fill = "white", colour = NA))
   p_attr
-  ggsave(p_attr, filename = "output/Fig8_attribution.png", width = 10, height = 9, dpi = 300)
+  ggsave(p_attr, filename = "output/Fig8_attribution.png", width = 8.5, height = 10, dpi = 300)
   
 ### Fig 7: map of predicted mortality by individual tree #######################################################
  tree_preds <- bind_rows(trees_model_list)
@@ -1012,11 +1040,18 @@ for (i in which(sp_list %in% taxa_to_fit)){
 
 
   
-  #zoom in on individual trees
-  ggplot() + ggthemes::theme_few() +   
-    geom_spatraster_rgb(data = nyc_topo_spatrast) +
-    geom_point(data = fitted_preds_sf, aes(x = X, y = Y, color = fitted_p)) +
-    coord_sf(xlim = c(-8233000, (-8233000 + 3000)), ylim = c(4955000, 4955000 + 3000)) +
+  #zoom in on individual trees: a 3 km x 3 km window (web mercator, EPSG:3857), with a keyless Esri basemap downloaded for
+  #that window so basemaps picks street-level tiles (basemap: Esri, HERE, Garmin, (c) OpenStreetMap contributors)
+  fig7_xlim <- c(-8233000, -8233000 + 3000)
+  fig7_ylim <- c(4955000, 4955000 + 3000)
+  fig7_window <- st_as_sfc(st_bbox(c(xmin = fig7_xlim[1], xmax = fig7_xlim[2], ymin = fig7_ylim[1], ymax = fig7_ylim[2]), crs = st_crs(3857)))
+  fig7_basemap <- rast(basemap_raster(fig7_window, map_service = "esri", map_type = "world_light_gray_base"))
+  
+  fig7_risk_map <- ggplot() + ggthemes::theme_few() +   
+    geom_spatraster_rgb(data = fig7_basemap) +
+    geom_point(data = fitted_preds_sf %>% filter(between(X, fig7_xlim[1], fig7_xlim[2]), between(Y, fig7_ylim[1], fig7_ylim[2])),
+               aes(x = X, y = Y, color = fitted_p)) +
+    coord_sf(xlim = fig7_xlim, ylim = fig7_ylim, expand = FALSE) +
     #facet_wrap(~sp_a, ncol = 6) +
     scale_color_viridis_c(option = "turbo", name = "predicted \n4-year \nmortality", limits = c(0, 0.3), oob = squish) + xlab("") + ylab("") + 
     theme(strip.text = element_text(face = "italic"),
@@ -1026,6 +1061,8 @@ for (i in which(sp_list %in% taxa_to_fit)){
           panel.grid.minor = element_blank(),
           axis.text = element_blank(),
           axis.ticks = element_blank()) 
+  fig7_risk_map
+  ggsave(fig7_risk_map, filename = "output/Fig7_predicted_risk_zoom.png", width = 7, height = 7, dpi = 300)
   
   
   # #create figure for predicted survival across the city
