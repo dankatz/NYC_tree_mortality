@@ -194,17 +194,23 @@ These are made **once for all taxa**. The defaults in the table are fixed a prio
 | Item | Content | File |
 |---|---|---|
 | Fig 1 | (manuscript figure, e.g. study area; not produced by the script) | |
-| Table 1 | Taxa, n, median DBH, observed 4-year and annual mortality | |
-| Fig 2 | Mortality versus DBH, by taxon. Draft model-based version: hazard ratio vs DBH relative to the taxon's median DBH, from each taxon's RW2 smooth. Credible bands need joint draws of the smooth, which the loop saves from 2026-10-22 on (next refit) | `output/Fig2_size_effect_model.png` |
-| Fig 3 | Map of observed mortality, by taxon | |
+| Table 1 | Taxa, n, share of 2015 census basal area, median DBH, annual mortality (sample flow numbers go in the Methods text, not the SI) | `output/table1.csv`, `output/table1.docx` |
+| Fig 2 | By taxon: building construction and demolition, 2013–17 and 2017–21 (2 × 2, shared axis); headline finding (NYC Parks) | `output/Fig2_forest_construction.png` |
+| Fig 3 | Mortality versus DBH, by taxon: hazard ratio vs DBH relative to the taxon's median DBH, from each taxon's RW2 smooth; credible bands from the joint draws saved at the 2026-10-23 refit | `output/Fig3_size_effect_model.png` |
 | Fig 4 | Mean effect of every driver across taxa (meta-analysis overview) | `output/Fig4_cross_taxa_means.png` |
-| Fig 5 | By taxon: building construction and demolition, 2013–17 and 2017–21 (2 × 2, shared axis) | `output/Fig5_forest_construction.png` |
-| Fig 6 | By taxon: stewardship, impervious share, canopy within 100 m, Sandy zone, summer max and min, population, SVI | `output/Fig6_forest_site_env_social.png` |
-| Fig 7 | Maps of predicted risk for individual trees | |
-| Fig S1 | By taxon: land use classes and park proximity | `output/FigS1_forest_landuse_park.png` |
-| SI | Sample flow; predictor correlations; meta-analysis genus sensitivity; sensitivity to measurement choices; spatial field maps; cross-validation and calibration; the loss-check results | `output/SI_*` |
+| Fig 5 | By taxon: stewardship, impervious share, canopy within 100 m, Sandy zone, summer max and min, population, SVI | `output/Fig5_forest_site_env_social.png` |
+| Fig 6 | Losses attributable to modifiable drivers (Shapley-averaged attributable fractions) | `output/Fig6_attribution.png` |
+| Fig 7 | (A) predicted risk of every tree and (B, C) spatial field of London planetree and green ash in one 1 × 1 km window (East Shore of Staten Island); (D, E) citywide fields of the two taxa in 300 m hexagons (≥ 10 trees) | `output/Fig7_risk_and_spatial_field.png` |
+| (removed) | Former Fig 3, observed mortality map, and former Fig 7, 3 km risk map: code commented out at the end of the script | |
+| Table S1 | Predictor redundancy: VIFs (all trees, median and max across taxa) and each driver's highest pooled correlation; cited in 2.3 | `output/TableS1_predictor_redundancy.docx` |
+| Table S2 | Meta-analysis vs multilevel (genus/taxon) meta-analysis; cited in 2.3 | `output/TableS2_meta_genus_sensitivity.docx` |
+| Fig S1 | Spatial block cross-validation: (A) in-sample vs held-out AUC, (B) calibration; cited in 2.4 | `output/FigS1_cross_validation.png` |
+| Table S3 | Street View verification results; cited in 2.6 (after the student's review) | |
+| Fig S2 | By taxon: land use classes and park proximity; cited in Results | `output/FigS2_forest_landuse_park.png` |
+| Zenodo | Full coefficient table and attribution by taxon (not SI); full VIF and correlation matrices | `output/forest_coefficients.csv`, `output/attribution_summary.csv`, `output/SI_predictor_*.csv` |
+| Not included | Stewardship levels, land cover within 10 m, sample-size map, spatial field maps (exploratory only) | |
 
-In the by-taxon figures, the y-axis order is "All taxa (meta-analysis)" at the top, then taxa alphabetically (so genera group together), then "other". Coefficients behind Figs 4–6 and S1 are in `output/forest_coefficients.csv`.
+In the by-taxon figures, the y-axis order is "All taxa (meta-analysis)" at the top, then taxa alphabetically (so genera group together), then "other". Coefficients behind Figs 2, 4, 5 and S2 are in `output/forest_coefficients.csv`.
 
 ## 9. Code changes needed before refitting
 
@@ -264,3 +270,6 @@ In the by-taxon figures, the y-axis order is "All taxa (meta-analysis)" at the t
 | 2026-10-20 | Attribution: canopy deficit removed (hard to interpret); four groups remain (construction & demolition, stewardship, impervious, Sandy) |
 | 2026-10-20 | No cause-of-loss analysis (response mixes natural and human removal); Street View verification of 200 recorded losses prepared (`streetview_verification/`) for a student |
 | 2026-10-22 | Model loop also saves 1,000 joint posterior draws of the DBH smooth (plus knot positions) for exact credible bands on the size-effect figure; takes effect at the next refit |
+| 2026-10-23 | SI set to Tables S1–S3 and Figs S1–S2 (numbered by first citation); sample flow moved into the Methods text; full coefficients and attribution by taxon go to Zenodo; spatial field maps not in the SI; Fig 7 stays in the main text |
+| 2026-10-23 | Fig 3 (observed mortality map) removed from the manuscript; its code is commented out at the end of `lidar_mort_analysis.R` |
+| 2026-10-23 | Figures renumbered by importance of findings: 2 construction & demolition, 3 size, 4 cross-taxa means, 5 site/env/social, 6 attribution, 7 risk + spatial field (new, replaces the 3 km risk map); Results drafted in this order (3.1–3.6) |
