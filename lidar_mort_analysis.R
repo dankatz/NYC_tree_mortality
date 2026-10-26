@@ -646,26 +646,26 @@ for (i in which(sp_list %in% taxa_to_fit)){
   size_df <- size_df %>% mutate(sp = factor(sp, levels = size_levels))
   size_rug <- size_rug %>% mutate(sp = factor(sp, levels = size_levels))
   
-  fig2_size_model <- ggplot(size_df, aes(x = dbh_cm)) +
+  fig3_size_model <- ggplot(size_df, aes(x = dbh_cm)) +
     geom_hline(yintercept = 1, colour = "grey60", linewidth = 0.3) +
     #95% band only where joint draws exist (marginal intervals mostly reflect the curve's overall level, not its shape)
-    geom_ribbon(data = ~ filter(.x, !is.na(hr_lower)), aes(ymin = hr_lower, ymax = hr_upper), fill = "#2a78d6", alpha = 0.2) +
-    geom_line(aes(y = hr), colour = "#2a78d6", linewidth = 0.6) +
+    geom_ribbon(data = ~ filter(.x, !is.na(hr_lower)), aes(ymin = hr_lower, ymax = hr_upper), fill = "grey20", alpha = 0.2) +
+    geom_line(aes(y = hr), colour = "grey20", linewidth = 0.6) +
     geom_rug(data = size_rug, sides = "b", colour = "grey40", length = unit(0.04, "npc")) +
     scale_y_log10(breaks = c(0.25, 0.5, 1, 2, 4, 8), labels = function(x) format(x, drop0trailing = TRUE)) +
     coord_cartesian(ylim = c(0.3, 8)) +
     facet_wrap(~sp, ncol = 6, scales = "free_x") +
-    labs(title = "Figure 3. Effect of tree size on mortality hazard, by taxon",
-         subtitle = "Hazard ratio relative to a tree of the taxon's median DBH (log scale), with 95% credible band; adjusted for all other drivers",
-         caption = paste0(if (any(is.na(size_df$hr_lower))) "DRAFT: some fits lack joint draws of the DBH smooth, so their curves have no band. " else "",
+    labs(caption = paste0(if (any(is.na(size_df$hr_lower))) "DRAFT: some fits lack joint draws of the DBH smooth, so their curves have no band. " else "",
                           "Curves span the 1st-99th percentile of DBH for each taxon; tick marks show DBH deciles."),
          x = "DBH (cm)", y = "Hazard ratio") +
     theme_minimal(base_size = 9) +
     theme(strip.text = element_text(face = "italic"), panel.grid.minor = element_blank(),
+          panel.grid.major = element_line(colour = "grey94", linewidth = 0.2), #faint, so the decile ticks stand out
+          panel.border = element_rect(fill = NA, colour = "grey40", linewidth = 0.4),
           panel.spacing.x = unit(1, "lines"), plot.caption = element_text(hjust = 0, colour = "#52514e"),
           plot.background = element_rect(fill = "white", colour = NA))
-  fig2_size_model
-  ggsave(fig2_size_model, filename = "output/Fig3_size_effect_model.png", width = 10, height = 7.5, dpi = 300)
+  fig3_size_model
+  ggsave(fig3_size_model, filename = "output/Fig3_size_effect_model.png", width = 10, height = 7.5, dpi = 300)
   
 ### Figs 2, 4, 5 and S2: forest plots of fixed effects (Fig 4 cross-taxa overview; Figs 2, 5, S2 by taxon) ########
   # term labels and display order, grouped by construct; continuous terms are per 1 SD (pooled across taxa)
@@ -769,7 +769,11 @@ for (i in which(sp_list %in% taxa_to_fit)){
     b <- if (ratio > 6) c(0.125, 0.25, 0.5, 1, 2, 4, 8, 16)
          else if (ratio > 1.8) c(0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6)
          else pretty(lims, n = 4)
-    b[b >= lims[1] & b <= lims[2] & b > 0]
+    b <- b[b >= lims[1] & b <= lims[2] & b > 0]
+    #every panel gets 3-5 breaks: too few -> evenly spaced values; too many -> every other one, keeping 1
+    if (length(b) < 3) { b <- pretty(lims, n = 4); b <- b[b >= lims[1] & b <= lims[2] & b > 0] }
+    if (length(b) > 5) b <- b[(seq_along(b) - which.min(abs(log(b)))) %% 2 == 0]
+    b
   }
   hr_labels <- function(x) format(x, drop0trailing = TRUE, trim = TRUE)
   
@@ -786,10 +790,10 @@ for (i in which(sp_list %in% taxa_to_fit)){
       geom_point(size = 1.6) +
       scale_x_log10(breaks = hr_breaks, labels = hr_labels) +
       scale_y_discrete(labels = taxon_labels) +
-      scale_colour_manual(values = c("Taxon" = "#2a78d6", "Mean across taxa" = "#eb6834"), name = NULL) +
+      scale_colour_manual(values = c("Taxon" = "grey20", "Mean across taxa" = "#1F9E89"), name = NULL) + #mean: viridis teal-green (viridis(10)[6])
       scale_shape_manual(values = c("Taxon" = 16, "Mean across taxa" = 18), name = NULL) +
-      facet_wrap(~term, ncol = ncol, scales = if (shared_x) "fixed" else "free_x", labeller = label_wrap_gen(width = 30)) +
-      labs(title = title, caption = paste(c(forest_caption, note), collapse = "\n"), x = "Hazard ratio", y = NULL) +
+      facet_wrap(~term, ncol = ncol, scales = if (shared_x) "fixed" else "free_x", labeller = label_value) +
+      labs(caption = paste(c(forest_caption, note), collapse = "\n"), x = "Hazard ratio", y = NULL) + #no title: it goes in the manuscript caption
       theme_minimal(base_size = 9) +
       theme(panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(),
             panel.grid.major.x = element_line(colour = "#e6e5e0", linewidth = 0.3),
@@ -805,14 +809,18 @@ for (i in which(sp_list %in% taxa_to_fit)){
   # shared x-axis (all binary). Street construction is not analyzed (data problems that could not be resolved)
   p_forest_construction <- plot_forest(
     c("is_B_cons_1317_bool", "is_DM_1317_bool", "is_B_cons_bool", "is_DM_bool"),
-    title = "Figure 2. Effects of nearby building construction and demolition on street tree mortality", ncol = 2, shared_x = TRUE)
+    title = "Figure 2. Effects of nearby building construction and demolition on street tree mortality", ncol = 2, shared_x = TRUE) +
+    theme(legend.position = "none", #the y-axis labels already distinguish taxa from the cross-taxa mean
+          panel.border = element_rect(fill = NA, colour = "grey40", linewidth = 0.4))
   p_forest_construction
   ggsave(p_forest_construction, filename = "output/Fig2_forest_construction.png", width = 7.5, height = 8.5, dpi = 300)
   
   # Fig 5, site, environment, stewardship and social context
   p_forest_site <- plot_forest(
     c("stewardship", "imp_vis_10_2017_z", "TC_100m_2017_z", "in_sandy_zone_bool", "summer_max_z", "summer_min_z", "pop_100m_log_z", "RPL_THEME1_z", "RPL_THEME3_z"),
-    title = "Figure 5. Effects of stewardship, site, environment and social context on street tree mortality", ncol = 3)
+    title = "Figure 5. Effects of stewardship, site, environment and social context on street tree mortality", ncol = 3) +
+    theme(legend.position = "none", #the y-axis labels already distinguish taxa from the cross-taxa mean
+          panel.border = element_rect(fill = NA, colour = "grey40", linewidth = 0.4))
   p_forest_site
   ggsave(p_forest_site, filename = "output/Fig5_forest_site_env_social.png", width = 9.5, height = 12, dpi = 300)
   
@@ -825,18 +833,23 @@ for (i in which(sp_list %in% taxa_to_fit)){
   ggsave(p_forest_landuse, filename = "output/FigS2_forest_landuse_park.png", width = 11, height = 8.5, dpi = 300)
   
   # Fig 4, overview (precedes the by-taxon figures): mean across taxa only, one row per driver
+  #rows in the order results are presented: construction and demolition (as in Fig 2), then Fig 5 terms, then land use and park (Fig S2)
+  fig4_order <- c("is_B_cons_1317_bool", "is_DM_1317_bool", "is_B_cons_bool", "is_DM_bool",
+                  "stewardship", "imp_vis_10_2017_z", "TC_100m_2017_z", "in_sandy_zone_bool", "summer_max_z", "summer_min_z",
+                  "pop_100m_log_z", "RPL_THEME1_z", "RPL_THEME3_z",
+                  "is_LU_hidensres", "is_LU_comm", "is_LU_indust", "is_LU_publicinst", "is_LU_outdoorrec", "is_LU_vacant", "is_LU_noparcel", "near_park_10m")
+  stopifnot(setequal(fig4_order, names(term_labels)))
   p_forest_mean <- meta_df %>% 
-    mutate(term = factor(term_labels[term], levels = rev(term_labels))) %>% 
+    mutate(term = factor(term_labels[term], levels = rev(term_labels[fig4_order]))) %>% 
     ggplot(aes(x = exp(estimate), y = term)) +
     geom_vline(xintercept = 1, colour = "grey60", linewidth = 0.3) +
-    geom_linerange(aes(xmin = exp(lower), xmax = exp(upper)), colour = "#eb6834", linewidth = 0.6) +
-    geom_point(colour = "#eb6834", shape = 18, size = 2.5) +
+    geom_linerange(aes(xmin = exp(lower), xmax = exp(upper)), colour = "#1F9E89", linewidth = 0.6) +
+    geom_point(colour = "#1F9E89", shape = 18, size = 2.5) +
     scale_x_log10(breaks = c(0.8, 0.9, 1, 1.25, 1.5, 2, 2.5)) +
-    labs(title = "Figure 4. Mean effect of each driver across taxa",
-         subtitle = sprintf("Hazard ratio with 95%% CI; random-effects meta-analysis (REML, Knapp-Hartung) of %d taxa", length(unique(coef_df$sp))),
-         x = "Hazard ratio (log scale)", y = NULL) +
+    labs(x = "Hazard ratio (log scale)", y = NULL) +
     theme_minimal(base_size = 10) +
     theme(panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(),
+          panel.border = element_rect(fill = NA, colour = "grey40", linewidth = 0.4),
           plot.background = element_rect(fill = "white", colour = NA))
   
   p_forest_mean
@@ -894,7 +907,7 @@ for (i in which(sp_list %in% taxa_to_fit)){
                          limits = c(-2, 2), oob = squish, name = "spatial effect\n(log hazard ratio)") +
     facet_wrap(~sp, ncol = 6) +
     coord_sf(crs = crs_m, datum = NA) +
-    labs(title = "Estimated spatial random effect (SPDE) by taxon", x = NULL, y = NULL) +
+    labs(x = NULL, y = NULL) +
     theme_minimal(base_size = 8) +
     theme(strip.text = element_text(face = "italic"), legend.position = "bottom",
           plot.background = element_rect(fill = "white", colour = NA))
@@ -939,15 +952,13 @@ for (i in which(sp_list %in% taxa_to_fit)){
   
   p_cv_calibration <- ggplot(cv_bins, aes(x = predicted, y = observed)) +
     geom_abline(slope = 1, intercept = 0, colour = "grey60", linewidth = 0.3) +
-    geom_linerange(aes(ymin = pmax(observed - 1.96 * se, 0), ymax = observed + 1.96 * se), colour = "#2a78d6", linewidth = 0.4) +
-    geom_point(colour = "#2a78d6", size = 1.2) +
+    geom_linerange(aes(ymin = pmax(observed - 1.96 * se, 0), ymax = observed + 1.96 * se), colour = "grey20", linewidth = 0.4) +
+    geom_point(colour = "grey20", size = 1.2) +
     facet_wrap(~sp, ncol = 6, labeller = as_labeller(function(x) ifelse(x == meta_label, cv_pooled_label, x))) +
     coord_equal(xlim = c(0, 0.4), ylim = c(0, 0.4)) +
     scale_x_continuous(labels = label_percent(accuracy = 1), breaks = c(0, 0.2, 0.4)) +
     scale_y_continuous(labels = label_percent(accuracy = 1), breaks = c(0, 0.2, 0.4)) +
-    labs(title = "Calibration of held-out predictions (spatial block cross-validation)",
-         subtitle = "Observed vs predicted 4-year canopy loss in deciles of predicted risk; 2 km blocks, 5 folds; line = perfect calibration",
-         x = "Predicted 4-year loss", y = "Observed 4-year loss") +
+    labs(x = "Predicted 4-year loss", y = "Observed 4-year loss") +
     theme_minimal(base_size = 8) +
     theme(strip.text = element_text(face = "italic"), panel.grid.minor = element_blank(),
           plot.background = element_rect(fill = "white", colour = NA))
@@ -962,25 +973,20 @@ for (i in which(sp_list %in% taxa_to_fit)){
     geom_vline(xintercept = 0.5, colour = "grey60", linewidth = 0.3) +
     geom_line(aes(group = sp), colour = "#d4d3cd", linewidth = 0.6) +
     geom_point(aes(colour = type, shape = type), size = 2) +
-    scale_colour_manual(values = c("In-sample" = "#a3a29c", "Cross-validated" = "#2a78d6"), name = NULL) +
+    scale_colour_manual(values = c("In-sample" = "#a3a29c", "Cross-validated" = "grey20"), name = NULL) +
     scale_shape_manual(values = c("In-sample" = 16, "Cross-validated" = 16), name = NULL) +
     scale_y_discrete(labels = function(x) { lab <- taxon_labels(x); lab[x == meta_label] <- cv_pooled_label; lab }) +
     scale_x_continuous(limits = c(0.5, 1)) +
-    labs(title = "Discrimination: in-sample vs spatially cross-validated AUC",
-         subtitle = "Held-out trees are in 2 km blocks not used for fitting; the spatial field cannot help there",
-         x = "AUC", y = NULL) +
+    labs(x = "AUC", y = NULL) +
     theme_minimal(base_size = 9) +
     theme(panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(),
           legend.position = "top", legend.justification = "left",
           plot.background = element_rect(fill = "white", colour = NA))
   
   # Fig S1: discrimination (A) and calibration (B) in one figure
-  fig_s1_cv <- (p_cv_auc + labs(title = "A. In-sample vs cross-validated AUC", subtitle = NULL)) +
-    (p_cv_calibration + labs(title = "B. Calibration of held-out predictions", subtitle = NULL)) +
+  fig_s1_cv <- (p_cv_auc + labs(title = "A")) + (p_cv_calibration + labs(title = "B")) +
     plot_layout(widths = c(1, 2.2)) +
-    plot_annotation(title = "Figure S1. Spatial block cross-validation (2 km blocks, 5 folds)",
-                    subtitle = "B: observed vs predicted 4-year canopy loss in deciles of predicted risk; line = perfect calibration",
-                    theme = theme(plot.background = element_rect(fill = "white", colour = NA)))
+    plot_annotation(theme = theme(plot.background = element_rect(fill = "white", colour = NA)))
   fig_s1_cv
   ggsave(fig_s1_cv, filename = "output/FigS1_cross_validation.png", width = 16, height = 8.5, dpi = 300)
   
@@ -1063,18 +1069,19 @@ for (i in which(sp_list %in% taxa_to_fit)){
     geom_vline(xintercept = 0, colour = "grey60", linewidth = 0.3) +
     geom_linerange(aes(xmin = pct_lower, xmax = pct_upper), linewidth = 0.5) +
     geom_point(size = 1.6) +
-    scale_colour_manual(values = c("Taxon" = "#2a78d6", "All taxa" = "#eb6834"), name = NULL) +
+    scale_colour_manual(values = c("Taxon" = "grey20", "All taxa" = "#1F9E89"), name = NULL) +
     scale_shape_manual(values = c("Taxon" = 16, "All taxa" = 18), name = NULL) +
+    scale_x_continuous(breaks = scales::breaks_pretty(n = 7)) + #more labels than the default, evenly spaced
     scale_y_discrete(labels = function(x) { lab <- taxon_labels(x); lab[x == meta_label] <- "All taxa (summed)"; lab }) +
     facet_wrap(~group, ncol = 2, scales = "free_x") +
-    labs(title = "Figure 6. Share of 2017-21 canopy losses associated with modifiable drivers",
-         subtitle = "Shapley-averaged attributable fraction (%) with 95% interval; exposure reduced to: no construction/demolition,\nstewardship present, 10th percentile impervious share, outside the Sandy zone",
-         caption = "Associational, not causal. Land use, canopy within 100 m, heat, SVI, population and park proximity held at observed values.\nIntervals reflect uncertainty in the driver effects.",
+    labs(caption = "Associational, not causal. Land use, canopy within 100 m, heat, SVI, population and park proximity held at observed values.\nIntervals reflect uncertainty in the driver effects.",
          x = "% of observed canopy losses", y = NULL) +
     theme_minimal(base_size = 9) +
     theme(panel.grid.minor = element_blank(), panel.grid.major.y = element_blank(),
           strip.text = element_text(face = "bold", hjust = 0), panel.spacing.x = unit(1.5, "lines"),
-          axis.text.y = element_text(size = 7), legend.position = "top", legend.justification = "left",
+          axis.text.y = element_text(size = 7),
+          legend.position = "none", #the "All taxa (summed)" row labels itself
+          panel.border = element_rect(fill = NA, colour = "grey40", linewidth = 0.4),
           plot.caption = element_text(hjust = 0, colour = "#52514e"),
           plot.background = element_rect(fill = "white", colour = NA))
   p_attr
@@ -1109,17 +1116,24 @@ for (i in which(sp_list %in% taxa_to_fit)){
   fig7_basemap <- rast(basemap_raster(st_transform(st_buffer(fig7_box, 200), 3857), map_service = "esri", map_type = "world_light_gray_base")) %>% 
     project(paste0("EPSG:", crs_m))
   
-  field_scale <- function(aes) continuous_scale(aes, palette = gradient_n_pal(c("#2a78d6", "#d4d1ca", "#d62728")), 
+  field_scale <- function(aes) continuous_scale(aes, palette = gradient_n_pal(c("#2a78d6", "#a9a59c", "#d62728")), 
                                                 limits = c(-1.5, 1.5), oob = squish, na.value = NA,
                                                 breaks = c(-1, 0, 1), labels = c("-1 (x0.37)", "0", "1 (x2.7)"),
                                                 name = "spatial effect\n(log hazard ratio)", guide = "colourbar")
   zoom_theme <- theme_void(base_size = 9) + 
     theme(panel.border = element_rect(fill = NA, colour = "grey40", linewidth = 0.4), plot.title = element_text(size = 9))
   zoom_panel <- function(d, colvar, title) {
+    d <- mutate(d, status = factor(ifelse(mort == 1, "Canopy loss", "No canopy loss"), levels = c("No canopy loss", "Canopy loss")))
     ggplot() +
       geom_spatraster_rgb(data = fig7_basemap, alpha = 0.7) +
-      geom_point(data = filter(d, mort == 0), aes(x, y, colour = .data[[colvar]]), size = 0.9, stroke = 0) +
-      geom_point(data = filter(d, mort == 1), aes(x, y, colour = .data[[colvar]]), size = 1.5, shape = 4, stroke = 0.55) +
+      #trees without loss: filled circles with a thin dark outline (visible on the light basemap whatever the fill);
+      #trees with loss: x in the same colour scale. The x layer adds only its shape to the legend (ggplot2 4 draws a legend
+      #symbol only from layers that contain that value), and its colour scale has no legend of its own
+      geom_point(data = filter(d, mort == 0), aes(x, y, fill = .data[[colvar]], shape = status), size = 0.9, colour = "grey30", stroke = 0.25) +
+      geom_point(data = filter(d, mort == 1), aes(x, y, colour = .data[[colvar]], shape = status), size = 1.5, stroke = 0.55,
+                 show.legend = c(shape = TRUE, colour = FALSE)) +
+      scale_shape_manual(values = c("No canopy loss" = 21, "Canopy loss" = 4), name = "2017-2021", drop = FALSE) +
+      guides(shape = guide_legend(override.aes = list(fill = "grey85", colour = "grey30", size = c(1.2, 1.8), stroke = c(0.25, 0.55)))) +
       coord_sf(crs = crs_m, xlim = fig7_win[c("xmin", "xmax")], ylim = fig7_win[c("ymin", "ymax")], expand = FALSE, datum = NA) +
       labs(title = title, x = NULL, y = NULL) + zoom_theme
   }
@@ -1134,22 +1148,31 @@ for (i in which(sp_list %in% taxa_to_fit)){
       theme_void(base_size = 9) + theme(plot.title = element_text(size = 9))
   }
   
+  #legends inset in the panels, each on a light grey box: predicted loss bottom left of A, loss/no loss bottom right of B,
+  #spatial effect top left of D (it also applies to the points in B and C)
+  inset_legend <- function(x, y) theme(legend.position = "inside", legend.position.inside = c(x, y), legend.justification = c(x, y),
+                                       legend.background = element_rect(fill = "grey92", colour = "grey60", linewidth = 0.3),
+                                       legend.margin = margin(4, 5, 4, 5))
   fig7_A <- zoom_panel(fig7_trees, "fitted_p", expression(bold("A")~~"Predicted risk, all taxa")) +
-    scale_colour_viridis_c(option = "plasma", end = 0.92, limits = c(0, 0.5), oob = squish, labels = label_percent(),
-                           name = "predicted\n4-year loss")
+    scale_colour_viridis_c(option = "plasma", end = 0.92, limits = c(0, 0.5), oob = squish) + #the x's
+    scale_fill_viridis_c(option = "plasma", end = 0.92, limits = c(0, 0.5), oob = squish, labels = label_percent(),
+                         name = "predicted\n4-year loss") + #the circles; this legend serves both
+    guides(shape = "none") + inset_legend(0.02, 0.02)
   fig7_B <- zoom_panel(filter(fig7_field, sp == fig7_taxa[1]) %>% semi_join(fig7_trees, by = c("x", "y")), "field",
-                       expression(bold("B")~~italic("Platanus")~"×"~italic("acerifolia"))) + field_scale("colour") + guides(colour = "none")
+                       expression(bold("B")~~italic("Platanus")~"×"~italic("acerifolia"))) + field_scale("colour") + field_scale("fill") +
+    guides(colour = "none", fill = "none") + inset_legend(0.98, 0.02)
   fig7_C <- zoom_panel(filter(fig7_field, sp == fig7_taxa[2]) %>% semi_join(fig7_trees, by = c("x", "y")), "field",
-                       expression(bold("C")~~italic("Fraxinus pennsylvanica"))) + field_scale("colour") + guides(colour = "none")
-  fig7_D <- city_panel(fig7_taxa[1], expression(bold("D")~~italic("Platanus")~"×"~italic("acerifolia")*", citywide")) + guides(fill = "none")
-  fig7_E <- city_panel(fig7_taxa[2], expression(bold("E")~~italic("Fraxinus pennsylvanica")*", citywide"))
+                       expression(bold("C")~~italic("Fraxinus pennsylvanica"))) + field_scale("colour") + field_scale("fill") +
+    guides(colour = "none", fill = "none", shape = "none")
+  fig7_D <- city_panel(fig7_taxa[1], expression(bold("D")~~italic("Platanus")~"×"~italic("acerifolia")*", citywide")) + inset_legend(0.02, 0.98)
+  fig7_E <- city_panel(fig7_taxa[2], expression(bold("E")~~italic("Fraxinus pennsylvanica")*", citywide")) + guides(fill = "none")
   
   fig7 <- (fig7_A | fig7_B | fig7_C) / (fig7_D | fig7_E) +
-    plot_layout(heights = c(1, 1.45), guides = "collect") &
-    theme(plot.background = element_rect(fill = "white", colour = NA), legend.title = element_text(size = 8),
-          legend.text = element_text(size = 7), legend.key.height = unit(0.45, "cm"))
+    plot_layout(heights = c(1, 1.45)) &
+    theme(plot.background = element_rect(fill = "white", colour = NA), legend.title = element_text(size = 7),
+          legend.text = element_text(size = 6.5), legend.key.height = unit(0.35, "cm"), legend.key.width = unit(0.3, "cm"))
   fig7
-  ggsave(fig7, filename = "output/Fig7_risk_and_spatial_field.png", width = 8.5, height = 7, dpi = 300)
+  ggsave(fig7, filename = "output/Fig7_risk_and_spatial_field.png", width = 7.9, height = 7, dpi = 300) #width fitted to the fixed-aspect map panels (no side padding)
   
 
 # ### Fig 3 (removed from the manuscript 2026-10-23; kept for possible reuse): maps of observed mortality for each taxon ###
