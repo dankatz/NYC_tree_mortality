@@ -35,4 +35,21 @@ cat("\nBy borough:\n")
 print(verified %>% group_by(borough) %>% summarise(n = n(), pct_confirmed = round(100 * mean(confirmed), 1)))
 cat("\nLow-confidence calls:", sum(verified$confidence == "Low", na.rm = TRUE), "\n")
 
+#the sample was drawn under the stem-point definition; check the trees that are also losses under the 3 m buffer definition (v5 tree_fate_17_21)
+fate <- readRDS("data/tree_mortality_variables/all_variables_v5.rds") %>% select(tree_id, tree_fate_17_21)
+verified <- verified %>% left_join(fate, by = "tree_id") %>% mutate(lost_3m = tree_fate_17_21 %in% "Dead")
+cat("\n3 m definition (tree_fate_17_21):\n"); print(verified %>% count(tree_fate_17_21))
+cat("\nConfirmed among trees also lost under the 3 m definition, %:\n"); print(round(share_ci(verified$confirmed[verified$lost_3m]), 1))
+cat("Canopy actually lost among trees also lost under the 3 m definition, %:\n"); print(round(share_ci(verified$canopy_lost[verified$lost_3m]), 1))
+cat("Confirmed among trees not lost under the 3 m definition, %:\n"); print(round(share_ci(verified$confirmed[!verified$lost_3m]), 1))
+
+#Table S3: outcomes for all verified trees and for those also lost under the 3 m definition
+outcome_levels <- c("GONE", "GONE_REPLANTED", "DEAD_STANDING", "ALIVE_MAJOR_CROWN_LOSS", "ALIVE_NO_CLEAR_CHANGE")
+tab_s3 <- full_join(verified %>% count(outcome, name = "n_point"),
+                    verified %>% filter(lost_3m) %>% count(outcome, name = "n_3m"), by = "outcome") %>%
+  mutate(across(c(n_point, n_3m), ~ coalesce(.x, 0L)), outcome = factor(outcome, outcome_levels)) %>% arrange(outcome) %>%
+  mutate(pct_point = round(100 * n_point / sum(n_point), 1), pct_3m = round(100 * n_3m / sum(n_3m), 1))
+print(tab_s3)
+write_csv(tab_s3, "output/TableS3_streetview_verification.csv")
+
 write_csv(verified, "streetview_verification/verification_results.csv")

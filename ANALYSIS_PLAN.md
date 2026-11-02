@@ -13,7 +13,7 @@ This plan sets out how the analysis in `lidar_mort_analysis.R` will be reworked.
 
 ## 2. Response and sample
 
-**Response.** The response is `mort = 1` if at least 50% of the 2017 canopy within 3 m of the tree point was lost by the 2021 lidar flight (`tree_fate_17_21 == "Dead"`; `canopy_loss_3m_pct` = 100 × loss / (loss + no change)), and `mort = 0` otherwise (`"Alive"`). This replaced the earlier stem-point rule (`canopy_change`) on 2026-10-30 after the Street View check (section 9). Mortality is the modeled event because it is the rare outcome (roughly 5–10% over 4 years). Modeling it directly lets the cloglog link give log hazard ratios (section 4).
+**Response.** The response is `mort = 1` if at least 50% of the 2017 canopy within 3 m of the tree point was lost by the 2021 lidar flight (`tree_fate_17_21 == "Dead"`; `canopy_loss_3m_pct` = 100 × loss / (loss + no change)), and `mort = 0` otherwise (`"Alive"`). This replaced the earlier stem-point rule (`canopy_change`) on 2026-10-30 after the Street View check (section 7). Mortality is the modeled event because it is the rare outcome (roughly 5–10% over 4 years). Modeling it directly lets the cloglog link give log hazard ratios (section 4).
 
 **What "loss" measures.** Canopy loss around the stem can mean any of the following:
 
@@ -187,6 +187,7 @@ These are made **once for all taxa**. The defaults in the table are fixed a prio
   - % of recorded losses confirmed gone, replaced or dead, with an exact 95% CI
   - % with real canopy loss, which also counts major crown loss on a living tree
   - breakdowns by construction exposure and borough
+- **Results (2026-11-02):** of the 200 verified trees (172 primaries, 28 backups replacing primaries that could not be verified), 78.0% (95% CI 71.6–83.5) were confirmed gone, replaced or dead under the stem-point definition. 168 of the 200 are also losses under the 3 m buffer definition; of these, 88.1% (82.2–92.6) were confirmed, and 92.9% had real canopy loss (also counting major crown loss on a living tree). Only 25% of the 32 trees the buffer drops were confirmed. Under the stem-point definition, Manhattan had the lowest confirmation rate (52% of 27). Reported in Table S3 (`output/TableS3_streetview_verification.csv`).
 - **Materials:** `streetview_verification/`: README with instructions, `verification_sheet.xlsx` with drop-downs and Street View links, and the sampling and analysis scripts.
 
 ## 8. Outputs
@@ -276,3 +277,4 @@ In the by-taxon figures, the y-axis order is "All taxa (meta-analysis)" at the t
 | 2026-10-26 | Figure styling: titles and subtitles removed (they go in the captions); taxa grey20, cross-taxa mean #1F9E89 (viridis teal-green); boxed panels and no legends in the forest plots; 3-5 x-axis breaks per forest-plot panel; Fig 7 dots outlined, darker neutral grey on the field scale, legends inset in panels A, B and D |
 | 2026-10-26 | Street View check (Ging-Yan): 24% of recorded losses were not dead or gone (13% alive with major dieback; 11% other errors: overhanging construction, small trees, or only a small area of canopy above the point removed). Testing an alternative loss definition using a buffer of a couple of meters around each tree point |
 | 2026-10-30 | Loss redefined with a 3 m buffer around each tree point (`all_variables_v5`, `tree_fate_17_21`: loss if ≥ 50% of the 2017 canopy within 3 m was lost); used for both the response and the sample, so trees with canopy gain or no canopy at the stem point are now included. Analysis sample 529,470 trees, 50,190 losses (was 494,897 and 45,112). All 21 taxa refit, CV re-run and all outputs regenerated (Oct 30 – Nov 1); old fits and outputs archived |
+| 2026-11-02 | Street View check completed: 78.0% of stem-point losses confirmed gone, replaced or dead; 88.1% (148 of 168) of those also lost under the 3 m buffer definition (Table S3). The earlier 24% error figure came from partial results; the final figure is 22% |
