@@ -40,8 +40,8 @@ library(gt)
 
 
 data_dir <- "data"
-#v4 includes the socioeconomic variables; see all_variables_v4_README.xlsx for column definitions
-tree_vars_full <- readRDS(file.path(data_dir, "tree_mortality_variables/all_variables_v4.rds"))
+#v5 = v4 plus canopy loss within a 3 m buffer of each tree (canopy_loss_3m_pct, tree_fate_17_21); see all_variables_v5_DD.xlsx
+tree_vars_full <- readRDS(file.path(data_dir, "tree_mortality_variables/all_variables_v5.rds"))
 
 #analysis CRS: NAD83 / New York Long Island in meters (tree coordinates arrive in EPSG:2263, US survey feet)
 crs_m <- 32118
@@ -111,11 +111,12 @@ tree_vars_full_nona_format <- tree_vars_full %>%
   filter(status == "Alive") %>%
   log_n("alive in 2015 census") %>%
   #create derived variables and filter out rows
-  mutate(mort = case_when( canopy_change == 1 ~ 0,      #1 = no change; assumed survival
-                           canopy_change == 2 ~ NA,     #2 = canopy gain, not to include in this analysis
-                           canopy_change == 3 ~ 1)) %>% #3 = canopy loss; assumed mortality (death or removal)
-  filter(!is.na(mort)) %>% #NA canopy_change = no canopy at the stem in 2017 or 2021
-  log_n("canopy loss or no change at stem (2017-2021)") %>%
+  #loss = at least 50% of the 2017 canopy within 3 m of the stem lost by 2021; assumed mortality (death or removal)
+  #(replaces the earlier stem-point rule, after Street View checks found 24% of stem-point losses were not dead or gone)
+  mutate(mort = case_when( tree_fate_17_21 == "Alive" ~ 0,
+                           tree_fate_17_21 == "Dead" ~ 1)) %>%
+  filter(!is.na(mort)) %>% #NA tree_fate_17_21 = no 2017 canopy within 3 m
+  log_n("2017 canopy within 3 m") %>%
   mutate(dbh_cm = tree_dbh * 2.54) %>%  #convert dbh from inches to cm
   filter(dbh_cm > 7.62) %>%  # remove small trees; 7.6 cm is 3 inches listed in Bigelow
   filter(dbh_cm < 300) %>%  #removing trees with a DBH greater than the maximum ever recorded in NYC

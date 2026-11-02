@@ -2,7 +2,7 @@
 
 Status: **draft, updated 2026-10-06**. Items marked **[ASK G-Y]** are questions about the data for Ging-Yan. The model specification in section 3 is implemented in `lidar_mort_analysis.R`.
 
-This plan sets out how the analysis in `lidar_mort_analysis.R` will be reworked. It is also the source for rewriting the Methods. Data: `data/tree_mortality_variables/all_variables_v4.rds`, with columns documented in `all_variables_v4_README.xlsx`.
+This plan sets out how the analysis in `lidar_mort_analysis.R` will be reworked. It is also the source for rewriting the Methods. Data: `data/tree_mortality_variables/all_variables_v5.rds` (v4 plus the 3 m buffer loss columns), with columns documented in `all_variables_v5_DD.xlsx`.
 
 ## 1. Questions
 
@@ -13,9 +13,9 @@ This plan sets out how the analysis in `lidar_mort_analysis.R` will be reworked.
 
 ## 2. Response and sample
 
-**Response.** The response is `mort = 1` if the tree had canopy loss at its stem point between the 2017 and 2021 lidar flights (`canopy_change == 3`), and `mort = 0` if there was no change (`canopy_change == 1`). Trees with canopy gain (`== 2`) are excluded. Mortality is the modeled event because it is the rare outcome (roughly 5–10% over 4 years). Modeling it directly lets the cloglog link give log hazard ratios (section 4).
+**Response.** The response is `mort = 1` if at least 50% of the 2017 canopy within 3 m of the tree point was lost by the 2021 lidar flight (`tree_fate_17_21 == "Dead"`; `canopy_loss_3m_pct` = 100 × loss / (loss + no change)), and `mort = 0` otherwise (`"Alive"`). This replaced the earlier stem-point rule (`canopy_change`) on 2026-10-30 after the Street View check (section 9). Mortality is the modeled event because it is the rare outcome (roughly 5–10% over 4 years). Modeling it directly lets the cloglog link give log hazard ratios (section 4).
 
-**What "loss" measures.** Canopy loss at the stem can mean any of the following:
+**What "loss" measures.** Canopy loss around the stem can mean any of the following:
 
 - death/removal of a living tree, for example for construction
 - heavy pruning
@@ -27,7 +27,7 @@ We will not try to untangle natural causes of death from intentional removal of 
 
 1. All 2015 census records: 683,788
 2. Tree recorded as `Alive` in the 2015 census. Dead trees and stumps are currently removed only indirectly, because their species is missing; this should be an explicit filter.
-3. `canopy_change` is 1 or 3. NA (79,970 records; 59,572 of them trees alive in 2015) means there was no canopy at the stem point in either 2017 or 2021 (confirmed by Ging-Yan). These trees are excluded. The sample is therefore trees with canopy at the stem in 2017. Trees that died or were removed between the 2015 census and the 2017 flight, and trees whose crowns don't register at the stem point, are outside it.
+3. `tree_fate_17_21` is not NA, i.e. there was 2017 canopy within 3 m of the tree point (615,611 of 652,173 alive trees). Trees that died or were removed between the 2015 census and the 2017 flight are outside the sample.
 4. DBH greater than 3 in (7.62 cm) and less than 300 cm.
 5. Land use from the nearest tax lot. There is no longer a distance filter. Trees more than 10 m (32.8 US survey ft) from any lot get their own land-use class, "not near a tax parcel" (about 16,000 trees, 3.3%). Trees within 10 m of a lot whose land use is missing are excluded: 2,027 trees (0.4%), mostly on miscellaneous (Z9), easement (Z7) or condo-billing (R0) lots. Their loss rate is the same as other trees (9.2% vs 9.1%), but they are spatially clustered, mostly in lower Manhattan, probably Battery Park City. **Provisional; may revisit.**
 6. Complete covariates. Missing SVI theme 1 removes 1.4% of trees, and 55% of those are within 10 m of a park (vs 6% overall), so this filter does not remove a random subset. Note it in the SI.
@@ -275,3 +275,4 @@ In the by-taxon figures, the y-axis order is "All taxa (meta-analysis)" at the t
 | 2026-10-23 | Figures renumbered by importance of findings: 2 construction & demolition, 3 size, 4 cross-taxa means, 5 site/env/social, 6 attribution, 7 risk + spatial field (new, replaces the 3 km risk map); Results drafted in this order (3.1–3.6) |
 | 2026-10-26 | Figure styling: titles and subtitles removed (they go in the captions); taxa grey20, cross-taxa mean #1F9E89 (viridis teal-green); boxed panels and no legends in the forest plots; 3-5 x-axis breaks per forest-plot panel; Fig 7 dots outlined, darker neutral grey on the field scale, legends inset in panels A, B and D |
 | 2026-10-26 | Street View check (Ging-Yan): 24% of recorded losses were not dead or gone (13% alive with major dieback; 11% other errors: overhanging construction, small trees, or only a small area of canopy above the point removed). Testing an alternative loss definition using a buffer of a couple of meters around each tree point |
+| 2026-10-30 | Loss redefined with a 3 m buffer around each tree point (`all_variables_v5`, `tree_fate_17_21`: loss if ≥ 50% of the 2017 canopy within 3 m was lost); used for both the response and the sample, so trees with canopy gain or no canopy at the stem point are now included. Analysis sample 529,470 trees, 50,190 losses (was 494,897 and 45,112). All 21 taxa refit, CV re-run and all outputs regenerated (Oct 30 – Nov 1); old fits and outputs archived |
